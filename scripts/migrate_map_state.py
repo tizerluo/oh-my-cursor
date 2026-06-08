@@ -89,6 +89,17 @@ def _plan_actions(git_root: Path, destructive: bool) -> list[dict[str, Any]]:
     return actions
 
 
+def _validate_rollback_dest(git_root: Path, dest: Path) -> None:
+    resolved_dest = dest.resolve()
+    git_root_resolved = git_root.resolve()
+    if resolved_dest == git_root_resolved:
+        return
+    try:
+        resolved_dest.relative_to(git_root_resolved)
+    except ValueError as exc:
+        raise MigrateError(f"rollback dest escapes repo: {resolved_dest}") from exc
+
+
 def _apply_actions(actions: list[dict[str, Any]]) -> None:
     for action in actions:
         src = Path(action["source"])
@@ -109,9 +120,11 @@ def _rollback(manifest_path: Path) -> None:
     if not manifest_path.is_file():
         raise MigrateError(f"manifest not found: {manifest_path}")
     manifest = _load_json(manifest_path)
+    git_root = Path(manifest["repo"]).resolve()
     for action in reversed(manifest.get("actions", [])):
         src = Path(action["source"])
         dest = Path(action["dest"])
+        _validate_rollback_dest(git_root, dest)
         if not dest.exists():
             continue
         if action["kind"] == "session_dir":

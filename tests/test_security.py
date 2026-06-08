@@ -27,6 +27,7 @@ class SecretTrustTests(unittest.TestCase):
         self._env_patch = patch.dict(os.environ, {}, clear=False)
         self._env_patch.start()
         os.environ.pop("OMC_SECRET_FILE", None)
+        os.environ.pop("OMC_LEGACY_SECRET_FILE", None)
 
     def tearDown(self):
         self._env_patch.stop()
@@ -71,12 +72,26 @@ class SecretTrustTests(unittest.TestCase):
             legacy.write_bytes(b"legacykey1234567890\n")
             os.chmod(legacy, 0o600)
             target = base / "nested" / "secret"
-            with patch.object(rg, "LEGACY_SECRET_FILE", legacy):
-                copied = rg.migrate_legacy_secret_if_needed(target)
+            os.environ["OMC_LEGACY_SECRET_FILE"] = str(legacy)
+            copied = rg.migrate_legacy_secret_if_needed(target)
             self.assertTrue(copied)
             self.assertTrue(target.is_file())
             self.assertEqual(target.read_bytes().strip(), b"legacykey1234567890")
             self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+
+    def test_legacy_secret_env_override(self):
+        rg = load_review_gate()
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            custom_legacy = base / "custom-legacy-secret"
+            custom_legacy.write_bytes(b"customlegacykey12345\n")
+            os.chmod(custom_legacy, 0o600)
+            target = base / "target-secret"
+            os.environ["OMC_LEGACY_SECRET_FILE"] = str(custom_legacy)
+            self.assertEqual(rg.legacy_secret_file_path(), custom_legacy.resolve())
+            copied = rg.migrate_legacy_secret_if_needed(target)
+            self.assertTrue(copied)
+            self.assertEqual(target.read_bytes().strip(), b"customlegacykey12345")
 
     def test_mode_not_0600_rejected(self):
         rg = load_review_gate()
