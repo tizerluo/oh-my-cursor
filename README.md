@@ -15,15 +15,17 @@ chmod +x hooks/run_tests.sh
 ./hooks/run_tests.sh
 ```
 
-## Install (Phase 2 — not yet implemented)
+## Install (Phase 2)
 
 ```bash
-./install.sh --copy    # production default
+chmod +x install.sh
+./install.sh --copy              # production default → ~/.cursor
 ./install.sh --link --i-know-symlink-risk
 ./install.sh --project /path/to/repo
+python3 scripts/install.py --doctor
 ```
 
-See [`.specs/oh-my-cursor.md`](.specs/oh-my-cursor.md) for full v1.0 scope.
+Details: [docs/install.md](docs/install.md)
 
 ## License
 
