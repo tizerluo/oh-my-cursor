@@ -41,12 +41,13 @@ def is_map_hook_entry(
     if entry.get("omc") is True:
         return True
     command = entry.get("command")
-    if not isinstance(command, str) or not command.strip().startswith("python3 "):
+    if not isinstance(command, str) or not command.strip():
         return False
     if review_gate_path is not None:
         gate = str(review_gate_path)
-        return gate in command
-    return REVIEW_GATE_MARKER in command
+        if gate in command:
+            return True
+    return command.strip().startswith("python3 ") and REVIEW_GATE_MARKER in command
 
 
 def expected_map_hook_count(review_gate_path: Path | None = None) -> int:

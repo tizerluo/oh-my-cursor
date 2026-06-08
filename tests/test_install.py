@@ -59,6 +59,23 @@ class MergeHooksTests(unittest.TestCase):
         pre = merged["hooks"]["preToolUse"]
         self.assertEqual(pre[0]["command"], "test -f /path/review_gate.py && echo ok")
 
+    def test_subagent_stop_env_prefix_treated_as_map(self):
+        gate = Path("/opt/omc/hooks/review_gate.py")
+        legacy_stop = {
+            "command": (
+                f"REVIEW_GATE_HOOK_MODE=subagentStop python3 {gate} record-subagent"
+            ),
+            "matcher": "coder",
+        }
+        self.assertTrue(omc_install.is_map_hook_entry(legacy_stop, review_gate_path=gate))
+        existing = {"hooks": {"subagentStop": [legacy_stop]}}
+        map_hooks = omc_install.render_map_hooks(gate)
+        merged = omc_install.merge_hooks(existing, map_hooks, review_gate_path=gate)
+        stop = merged["hooks"]["subagentStop"]
+        self.assertEqual(len(stop), 3)
+        self.assertTrue(all(omc_install.is_map_hook_entry(e, gate) for e in stop))
+        self.assertTrue(all(e.get("omc") is True for e in stop))
+
     def test_rendered_commands_are_quoted(self):
         gate = Path("/opt/with space/review_gate.py")
         rendered = omc_install.render_map_hooks(gate)
