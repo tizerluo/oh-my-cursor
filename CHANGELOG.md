@@ -6,10 +6,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **#1** [docs/workflows/plan-then-hyperplan.md](docs/workflows/plan-then-hyperplan.md): Plan → Hyperplan → merge-back workflow — P0/P1 fusion checklist, Configuration Gate (AskQuestion), debate `claims` acceptance guard alignment, extended anti-patterns
+
 ### Fixed
 
 - **#8** Reviewer logical role mapping: `generalPurpose` reviewer spawns infer `reviewer-*` from prompt/model; merge-gate markers use logical role; Task denies invalid `subagent_type=reviewer-*` with spawn template
 - **#4** Hyperplan: `advance_critic_queue` requires non-empty debate `claims` before `accepted`; Configuration Gate in map-hyperplan SKILL; sessionStart hints
+
+### Changed
+
+- [skills/map-hyperplan/SKILL.md](skills/map-hyperplan/SKILL.md): cross-reference merge-back checklist and debate claims requirement in workflow doc
 
 ### Planned
 
