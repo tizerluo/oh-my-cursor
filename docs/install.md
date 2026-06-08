@@ -37,8 +37,7 @@ Uses copy mode internally (`--project` + `--link` is rejected).
 
 ```bash
 python3 scripts/install.py --doctor
-# or after install to a custom target:
-python3 scripts/install.py --doctor --target /path/to/.cursor
+python3 scripts/install.py --doctor --security   # Phase 2b: secret + hash checks
 ```
 
 ## Uninstall hooks merge only
@@ -60,6 +59,6 @@ Copied/symlinked assets under `~/.cursor/` are not removed automatically.
 
 ## Install manifest
 
-Writes `.cursor/omc-install.json` with `omc_root`, `mode`, `review_gate_path`, `installed_at`.
+Writes `.cursor/omc-install.json` with `omc_root`, `mode`, `review_gate_path`, `secret_path`, `review_gate_sha256`, `installed_at`.
 
-See [`.specs/oh-my-cursor.md`](../.specs/oh-my-cursor.md) for Secret trust contract (Phase 2b).
+See [security.md](security.md) and [`.specs/oh-my-cursor.md`](../.specs/oh-my-cursor.md).
