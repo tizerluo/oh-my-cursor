@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -154,6 +156,33 @@ def review_gate_path_for(cursor_dir: Path, mode: str) -> Path:
     return (cursor_dir / "hooks" / "review_gate.py").resolve()
 
 
+def secret_path_for_install(cursor_dir: Path, mode: str) -> Path:
+    if mode == "link":
+        return (OMC_ROOT / "hooks" / ".review-gate-secret").resolve()
+    return (cursor_dir / "hooks" / ".review-gate-secret").resolve()
+
+
+def review_gate_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def load_review_gate_module():
+    path = OMC_ROOT / "hooks" / "review_gate.py"
+    spec = importlib.util.spec_from_file_location("omc_review_gate", path)
+    if spec is None or spec.loader is None:
+        raise InstallError(f"Cannot load review_gate from {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def ensure_install_secret(cursor_dir: Path, mode: str) -> Path:
+    rg = load_review_gate_module()
+    target = secret_path_for_install(cursor_dir, mode)
+    rg.bootstrap_secret(target)
+    return target
+
+
 def _remove_path(path: Path) -> None:
     if path.is_symlink():
         path.unlink()
@@ -261,12 +290,19 @@ def ensure_project_gitignore(project_root: Path) -> None:
         gitignore.write_text(f"{line}\n", encoding="utf-8")
 
 
-def write_install_manifest(cursor_dir: Path, mode: str, review_gate_path: Path) -> None:
+def write_install_manifest(
+    cursor_dir: Path,
+    mode: str,
+    review_gate_path: Path,
+    secret_path: Path,
+) -> None:
     manifest = {
         "schema_version": 1,
         "omc_root": str(OMC_ROOT),
         "mode": mode,
         "review_gate_path": str(review_gate_path),
+        "secret_path": str(secret_path),
+        "review_gate_sha256": review_gate_sha256(review_gate_path),
         "installed_at": datetime.now(timezone.utc).isoformat(),
     }
     atomic_write_json(cursor_dir / INSTALL_MANIFEST, manifest)
@@ -310,8 +346,30 @@ def uninstall_hooks_json(cursor_dir: Path) -> Path:
     return backup
 
 
-def run_doctor(cursor_dir: Path | None = None) -> int:
-    """Minimal Phase 2 doctor; full --security checks land in Phase 2b."""
+def _check_secret_conflicts(primary_secret: Path) -> list[str]:
+    issues: list[str] = []
+    global_secret = (Path.home() / ".cursor" / "hooks" / ".review-gate-secret").resolve()
+    primary = primary_secret.resolve()
+    candidates = {p for p in (primary, global_secret) if p.is_file() and not p.is_symlink()}
+    if len(candidates) <= 1:
+        return issues
+    contents: dict[Path, bytes] = {}
+    for path in candidates:
+        try:
+            contents[path] = path.read_bytes()
+        except OSError as exc:
+            issues.append(f"cannot read secret {path}: {exc}")
+    unique = {data for data in contents.values()}
+    if len(unique) > 1:
+        issues.append(
+            "mixed install: multiple secret files with different content "
+            f"({', '.join(str(p) for p in contents)})"
+        )
+    return issues
+
+
+def run_doctor(cursor_dir: Path | None = None, *, security: bool = False) -> int:
+    """Install verification; use security=True for Phase 2b secret checks."""
     issues: list[str] = []
     ok: list[str] = []
 
@@ -322,13 +380,15 @@ def run_doctor(cursor_dir: Path | None = None) -> int:
 
     cursor = cursor_dir or (Path.home() / ".cursor")
     manifest_path = cursor / INSTALL_MANIFEST
+    manifest: dict[str, Any] = {}
     if manifest_path.is_file():
         manifest = load_json(manifest_path)
         gate = Path(str(manifest.get("review_gate_path", "")))
         ok.append(f"install manifest: {manifest.get('mode')} @ {manifest.get('installed_at', '?')}")
     else:
         gate = cursor / "hooks" / "review_gate.py"
-        issues.append(f"no {INSTALL_MANIFEST} (install may not have run)")
+        if not security:
+            issues.append(f"no {INSTALL_MANIFEST} (install may not have run)")
 
     if gate.is_file():
         ok.append(f"review_gate.py: {gate}")
@@ -368,7 +428,28 @@ def run_doctor(cursor_dir: Path | None = None) -> int:
     if tests_script.is_file():
         ok.append(f"tests: run {tests_script} (from omc repo)")
 
-    print("omc doctor (Phase 2)")
+    if security:
+        if manifest.get("secret_path"):
+            secret_path = Path(str(manifest["secret_path"]))
+        else:
+            secret_path = secret_path_for_install(cursor, str(manifest.get("mode", "copy")))
+        try:
+            rg = load_review_gate_module()
+            rg._read_secret_bytes(secret_path)
+            ok.append(f"secret trust OK: {secret_path}")
+        except Exception as exc:
+            issues.append(f"secret check failed: {exc}")
+        if gate.is_file() and manifest.get("review_gate_sha256"):
+            actual = review_gate_sha256(gate)
+            expected = str(manifest["review_gate_sha256"])
+            if actual == expected:
+                ok.append("review_gate.py hash matches manifest")
+            else:
+                issues.append("review_gate.py hash mismatch vs omc-install.json")
+        issues.extend(_check_secret_conflicts(secret_path))
+
+    title = "omc doctor --security" if security else "omc doctor"
+    print(title)
     for item in ok:
         print(f"  OK  {item}")
     for item in issues:
@@ -402,13 +483,15 @@ def install(
         ensure_project_gitignore(project)
 
     gate_path = review_gate_path_for(cursor_dir, mode)
+    secret_path = ensure_install_secret(cursor_dir, mode)
     backup, hooks_json = merge_hooks_json(cursor_dir, mode)
-    write_install_manifest(cursor_dir, mode, gate_path)
+    write_install_manifest(cursor_dir, mode, gate_path, secret_path)
 
     print(f"oh-my-cursor install ({mode})")
     print(f"  OMC_ROOT:          {OMC_ROOT}")
     print(f"  Target .cursor:    {cursor_dir}")
     print(f"  review_gate.py:    {gate_path}")
+    print(f"  secret:            {secret_path}")
     print(f"  hooks.json:        {hooks_json}")
     if backup != hooks_json:
         print(f"  hooks.json backup: {backup}")
@@ -435,6 +518,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--uninstall", action="store_true", help="Restore hooks.json from latest backup")
     parser.add_argument("--doctor", action="store_true", help="Run install verification checks")
+    parser.add_argument(
+        "--security",
+        action="store_true",
+        help="With --doctor: run secret trust and hash checks (Phase 2b)",
+    )
     return parser
 
 
@@ -445,7 +533,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.doctor:
             cursor = resolve_target_cursor(args.target, args.project if args.project else None)
-            return run_doctor(cursor if args.target or args.project else None)
+            return run_doctor(
+                cursor if args.target or args.project else None,
+                security=args.security,
+            )
 
         if args.uninstall:
             cursor_dir = resolve_target_cursor(args.target, args.project)

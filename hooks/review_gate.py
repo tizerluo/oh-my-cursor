@@ -7,6 +7,7 @@ import fnmatch
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import hashlib
@@ -14,7 +15,7 @@ import hmac
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 SESSION_DIR = ".review-session"
 SESSION_FILE = ".review-session.json"
@@ -27,9 +28,145 @@ CRITIC_QUEUE_FILE = "critic-queue.json"
 SECURITY_QUEUE_FILE = "security-queue.json"
 ROLES_DIR = "roles"
 ROUTING_RULES_FILE = "routing-rules.json"
-SECRET_FILE = Path.home() / ".cursor" / "hooks" / ".review-gate-secret"
+HOOKS_DIR = Path(__file__).resolve().parent
+LEGACY_SECRET_FILE = Path.home() / ".cursor" / "hooks" / ".review-gate-secret"
 SPECS_DIR = ".specs"
 POC_DIR = ".review/poc"
+
+
+class SecretError(RuntimeError):
+    pass
+
+
+def secret_file_path() -> Path:
+    env = os.environ.get("OMC_SECRET_FILE")
+    if env:
+        return Path(env).expanduser().resolve()
+    return HOOKS_DIR / ".review-gate-secret"
+
+
+def _secret_fail(message: str) -> NoReturn:
+    print(f"REVIEW_GATE_SECRET_ERROR: {message}", file=sys.stderr)
+    sys.exit(2)
+
+
+def _validate_secret_stat(path: Path) -> None:
+    if path.is_symlink():
+        raise SecretError(f"secret file must not be a symlink: {path}")
+    try:
+        st = path.lstat()
+    except OSError as exc:
+        raise SecretError(f"cannot stat secret file {path}: {exc}") from exc
+    if not stat.S_ISREG(st.st_mode):
+        raise SecretError(f"secret file must be a regular file: {path}")
+    if st.st_uid != os.geteuid():
+        raise SecretError(f"secret file owner mismatch: {path}")
+    mode = st.st_mode & 0o777
+    if mode != 0o600:
+        raise SecretError(f"secret file must be mode 0600, got {oct(mode)}: {path}")
+
+
+def _read_secret_bytes(path: Path) -> bytes:
+    _validate_secret_stat(path)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise SecretError(f"cannot open secret file {path}: {exc}") from exc
+    try:
+        data = os.read(fd, 512)
+    finally:
+        os.close(fd)
+    value = data.strip()
+    if not value:
+        raise SecretError(f"secret file is empty: {path}")
+    return value
+
+
+def migrate_legacy_secret_if_needed(target: Path | None = None) -> bool:
+    """Copy legacy secret to target if needed. Returns True if copied."""
+    dest = (target or secret_file_path()).resolve()
+    legacy = LEGACY_SECRET_FILE.resolve()
+    if dest == legacy:
+        return False
+    if dest.exists():
+        return False
+    if not LEGACY_SECRET_FILE.is_file() or LEGACY_SECRET_FILE.is_symlink():
+        return False
+    _validate_secret_stat(LEGACY_SECRET_FILE)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(dest.parent, 0o700)
+    except OSError:
+        pass
+    data = _read_secret_bytes(LEGACY_SECRET_FILE)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(dest, flags, 0o600)
+    except FileExistsError:
+        return False
+    except OSError as exc:
+        raise SecretError(f"cannot create secret file {dest}: {exc}") from exc
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data + b"\n")
+    except OSError as exc:
+        dest.unlink(missing_ok=True)
+        raise SecretError(f"cannot write secret file {dest}: {exc}") from exc
+    return True
+
+
+def _create_secret_file(path: Path) -> bytes:
+    if LEGACY_SECRET_FILE.is_file() and not LEGACY_SECRET_FILE.is_symlink():
+        migrate_legacy_secret_if_needed(path)
+        if path.is_file():
+            return _read_secret_bytes(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(path.parent, 0o700)
+    except OSError:
+        pass
+    value = secrets.token_hex(32).encode("ascii")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags, 0o600)
+    except FileExistsError:
+        return _read_secret_bytes(path)
+    except OSError as exc:
+        raise SecretError(f"cannot create secret file {path}: {exc}") from exc
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(value + b"\n")
+    except OSError as exc:
+        path.unlink(missing_ok=True)
+        raise SecretError(f"cannot write secret file {path}: {exc}") from exc
+    return value
+
+
+def bootstrap_secret(target: Path) -> Path:
+    """Ensure secret exists at target with trust contract (install / doctor)."""
+    target = target.resolve()
+    migrate_legacy_secret_if_needed(target)
+    if target.is_file():
+        _read_secret_bytes(target)
+    else:
+        _create_secret_file(target)
+    return target
+
+
+def _secret() -> bytes:
+    path = secret_file_path()
+    try:
+        migrate_legacy_secret_if_needed(path)
+        if path.is_file():
+            return _read_secret_bytes(path)
+        return _create_secret_file(path)
+    except SecretError as exc:
+        _secret_fail(str(exc))
+    except OSError as exc:
+        _secret_fail(f"secret I/O failed for {path}: {exc}")
+    raise AssertionError("unreachable")
+
 
 REVIEWER_TYPES = {"reviewer-grok", "reviewer-codex", "reviewer-gemini"}
 IMPLEMENTER_TYPES = {"coder"}
@@ -209,24 +346,6 @@ def _load_json(raw: str) -> dict[str, Any]:
         return data if isinstance(data, dict) else {}
     except json.JSONDecodeError:
         return {}
-
-
-def _secret() -> bytes:
-    try:
-        if SECRET_FILE.is_file():
-            return SECRET_FILE.read_bytes().strip()
-        SECRET_FILE.parent.mkdir(parents=True, exist_ok=True)
-        value = secrets.token_hex(32).encode("ascii")
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-        try:
-            fd = os.open(SECRET_FILE, flags, 0o600)
-        except FileExistsError:
-            return SECRET_FILE.read_bytes().strip()
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(value + b"\n")
-        return value
-    except OSError:
-        return secrets.token_hex(32).encode("ascii")
 
 
 def _canonical_without_seal(data: dict[str, Any]) -> bytes:
