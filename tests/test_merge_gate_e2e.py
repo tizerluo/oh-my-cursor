@@ -136,6 +136,20 @@ class MergeGateE2ETests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("BLOCKED", agent)
 
+    def test_inactive_hyperplan_feature_push_allowed(self):
+        root = self.tmp / "repo4"
+        root.mkdir()
+        self._config(root, "map-hyperplan", active=False)
+        with patch.object(self.rg, "load_map_context") as load_ctx:
+            load_ctx.return_value = {
+                "git_root": root,
+                "branch": "feat/issue-3",
+                "head_sha": self.head,
+                "config": json.loads((root / ".review/config.json").read_text()),
+            }
+            result = self.rg.check_merge_from_hook({"command": "git push origin feat/issue-3"})
+        self.assertEqual(result["permission"], "allow")
+
 
 class ShellPermissionTests(unittest.TestCase):
     def setUp(self):

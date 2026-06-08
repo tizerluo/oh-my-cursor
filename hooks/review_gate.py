@@ -1263,11 +1263,11 @@ def check_merge_from_hook(data: dict[str, Any]) -> dict[str, Any]:
 
     config = ctx.get("config") or {}
     workflow = str(config.get("workflow") or "multi-agent-pr")
-    if workflow == "map-hyperplan":
+    if workflow == "map-hyperplan" and config.get("active"):
         return {
             "permission": "deny",
-            "user_message": "map-hyperplan is planning-only; merge/push is permanently blocked.",
-            "agent_message": "BLOCKED: map-hyperplan never passes merge gate.",
+            "user_message": "map-hyperplan session active; planning-only.",
+            "agent_message": "BLOCKED: hyperplan session active; planning-only.",
         }
 
     ok, user_message, agent_message = validate_review_state(git_root, branch, head_sha)
@@ -1405,7 +1405,28 @@ def advance_critic_queue(
     progress["updated_at"] = _now_iso()
     _write_json_file(progress_path, progress)
 
-    return {"ok": True, "queue_action": action, "pending_remaining": len(kept), "phase": progress["phase"]}
+    result: dict[str, Any] = {
+        "ok": True,
+        "queue_action": action,
+        "pending_remaining": len(kept),
+        "phase": progress["phase"],
+    }
+
+    if not kept:
+        config_path = _review_path(git_root, CONFIG_FILE)
+        config = _read_json_file(config_path)
+        if config and str(config.get("workflow") or "") == "map-hyperplan":
+            queue_session_id = critic_queue.get("session_id")
+            config_session_id = config.get("session_id")
+            if queue_session_id and queue_session_id != config_session_id:
+                result["deactivate_skipped"] = "session_mismatch"
+            else:
+                config["active"] = False
+                config["deactivated_at"] = _now_iso()
+                _write_json_file(config_path, config)
+                result["deactivated"] = True
+
+    return result
 
 
 def parse_spec_frontmatter(text: str) -> dict[str, str]:

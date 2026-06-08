@@ -4,6 +4,17 @@ All notable changes to **oh-my-cursor** are documented here.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.0.2] - Unreleased
+
+### Fixed
+
+- **Issue #3** `check_merge_from_hook`: gate `map-hyperplan` deny on `config.active` only; inactive hyperplan falls through to `validate_review_state` for merge/protected push
+- **Issue #3** `advance_critic_queue`: auto-deactivate `config.active` when critic queue empties and session_id matches (or is absent)
+
+### Changed
+
+- [docs/workflows/plan-then-hyperplan.md](docs/workflows/plan-then-hyperplan.md): exit checklist notes auto-teardown and multi-agent-pr handoff
+
 ## [1.0.1] - 2026-06-09
 
 ### Fixed
@@ -63,9 +74,3 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Tests
 
 - 81 unit/integration tests via [`hooks/run_tests.sh`](hooks/run_tests.sh)
-
-## [Unreleased]
-
-### Planned
-
-- v2.0.0: remove legacy `.review-session/` read paths (target 2027-Q1)
