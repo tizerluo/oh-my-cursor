@@ -49,6 +49,7 @@ python3 scripts/migrate_map_state.py /path/to/repo --rollback
 
 - New markers and verdicts write to canonical paths only
 - Legacy files remain until manually removed (copy mode) or moved (destructive mode)
+- **`--destructive` moves only the session directory.** Verdict and session-summary are always copied (never moved), so `.review-verdict.json` / `.review-session.json` may remain until you delete them manually.
 - `review_gate.py` emits `MAP_DEF09` stderr warning when legacy-only paths are detected
 
 See [`.specs/oh-my-cursor.md`](../.specs/oh-my-cursor.md) and [security.md](security.md).

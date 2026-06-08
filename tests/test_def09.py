@@ -217,6 +217,23 @@ class MigrateMapStateTests(unittest.TestCase):
             with self.assertRaises(self.migrate.MigrateError):
                 self.migrate.migrate(root, apply=False, destructive=False, force=False, confirm=None)
 
+    def test_rollback_after_apply_copy_removes_canonical_session(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            branch, sha = "main", "abc"
+            legacy_dir = root / ".review-session" / branch / sha
+            write_marker_file(self.rg, legacy_dir, "coder", branch, sha)
+            manifest = self.migrate.migrate(
+                root, apply=True, destructive=False, force=False, confirm=None
+            )
+            canonical = root / ".review" / "session" / branch / sha
+            self.assertTrue(canonical.is_dir())
+            manifest_path = root / ".review" / "migrate-manifest.json"
+            self.assertTrue(manifest_path.is_file())
+            self.migrate._rollback(manifest_path)
+            self.assertFalse(canonical.exists())
+            self.assertTrue(legacy_dir.is_dir())
+
 
 if __name__ == "__main__":
     unittest.main()

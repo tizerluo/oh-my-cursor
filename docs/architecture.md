@@ -12,7 +12,7 @@ oh-my-cursor/
 ├── scripts/migrate_map_state.py
 ├── skills/                  # multi-agent-pr, map-*
 ├── agents/planner.md
-└── tests/                   # 81 tests
+└── tests/                   # 98+ tests
 ```
 
 ## Install targets

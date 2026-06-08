@@ -48,7 +48,7 @@ Coder fixes P1s → tests pass
        ↓
 (Optional R2 if needed)
        ↓
-Minimum Review Gate: write .review-verdict.json
+Minimum Review Gate: write `.review/verdict.json`
        ↓
 Commander: CI green → merge
 ```
@@ -62,7 +62,7 @@ Coder subagent implements fix (Commander MUST NOT edit code directly)
        ↓
 Reviewer-Grok reviews correctness
        ↓
-Commander synthesizes verdict → writes .review-verdict.json
+Commander synthesizes verdict → writes `.review/verdict.json`
        ↓
 CI green → merge
 ```
@@ -290,7 +290,7 @@ Only AskQuestion + written config authorizes workflow execution.
   roles/{subagent_id}.json  # tool permission state
 ```
 
-Existing `.review-session/` and `.review-verdict.json` remain at repo root (merge gate).
+Legacy `.review-session/` and `.review-verdict.json` are read-only fallbacks (v1.x); always **write** to `.review/session/` and `.review/verdict.json`.
 
 **Writer separation:** Commander writes `phase`, `completed`, `head_sha`, `branch`;
 stop hook writes `fix_round` only when automating fix loops.
@@ -490,11 +490,11 @@ Wait for the required reviewer set: one reviewer for Hotfix, all three reviewers
 **If P0 + P1 > 0:**
 1. Write `.review/fix-queue.json` (session_id, branch, head_sha, round, p0_issues, p1_issues)
 2. Update `.review/progress.json`: keep `phase = synthesis-complete` (stop hook may remind only)
-3. DO NOT write `.review-verdict.json` (verdict = clean only)
+3. DO NOT write `.review/verdict.json` (verdict = clean only)
 4. Proceed to Step 8 (Fix-Review Loop)
 
 **If P0 + P1 = 0:**
-1. Write `.review-verdict.json` for current branch and HEAD
+1. Write `.review/verdict.json` for current branch and HEAD
 2. Delete `.review/fix-queue.json` if it exists
 3. Update `.review/progress.json`: `phase = merge-ready`
 4. Write knowledge artifacts (see below)
@@ -599,8 +599,8 @@ Commander checklist:
 - [ ] No P0 or P1 in latest review round
 - [ ] All tests pass locally
 - [ ] CI green
-- [ ] Required subagent marker files exist under `.review-session/<branch>/<HEAD>/`
-- [ ] `.review-verdict.json` exists and records reviewer model(s) + verdict
+- [ ] Required subagent marker files exist under `.review/session/<branch>/<HEAD>/`
+- [ ] `.review/verdict.json` exists and records reviewer model(s) + verdict
 - [ ] `git push -u origin <branch>` + `gh pr create` + `gh pr merge --squash --delete-branch`
 
 **After successful merge — session cleanup:**
@@ -609,7 +609,7 @@ Commander checklist:
 3. Delete `.review/progress.json`
 4. Delete `.review/roles/` session files (if exists)
 5. Keep `.review/knowledge/` (persistent across PRs)
-6. Keep `.review-session/` and `.review-verdict.json` (HEAD invalidation handled by gate)
+6. Use canonical `.review/session/` and `.review/verdict.json` (HEAD invalidation handled by gate)
 
 ## Merge Criteria
 
@@ -617,8 +617,8 @@ Commander checklist:
 - Zero P0 issues
 - Zero P1 issues
 - At least one non-Commander model review
-- `.review-verdict.json` written before merge
-- `.review-session/<branch>/<HEAD>/` markers match current branch + HEAD
+- `.review/verdict.json` written before merge
+- `.review/session/<branch>/<HEAD>/` markers match current branch + HEAD
 - CI passes
 
 **Commander discretion**:
