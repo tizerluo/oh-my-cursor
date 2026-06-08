@@ -21,6 +21,10 @@ SESSION_DIR = ".review-session"
 SESSION_FILE = ".review-session.json"
 VERDICT_FILE = ".review-verdict.json"
 REVIEW_DIR = ".review"
+CANONICAL_SESSION_SUBDIR = "session"
+CANONICAL_SESSION_SUMMARY = "session-summary.json"
+CANONICAL_VERDICT = "verdict.json"
+DEF09_SUNSET_VERSION = "v2.0.0"
 CONFIG_FILE = "config.json"
 PROGRESS_FILE = "progress.json"
 FIX_QUEUE_FILE = "fix-queue.json"
@@ -607,12 +611,70 @@ def _slug(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_") or "unknown"
 
 
-def _session_head_dir(git_root: Path, branch: str, head_sha: str) -> Path:
+def _canonical_session_head_dir(git_root: Path, branch: str, head_sha: str) -> Path:
+    return git_root / REVIEW_DIR / CANONICAL_SESSION_SUBDIR / _slug(branch) / head_sha
+
+
+def _legacy_session_head_dir(git_root: Path, branch: str, head_sha: str) -> Path:
     return git_root / SESSION_DIR / _slug(branch) / head_sha
 
 
+def _session_dir_has_markers(head_dir: Path) -> bool:
+    return head_dir.is_dir() and any(head_dir.glob("*.json"))
+
+
+def _session_marker_read_dir(git_root: Path, branch: str, head_sha: str) -> Path:
+    canonical = _canonical_session_head_dir(git_root, branch, head_sha)
+    if _session_dir_has_markers(canonical):
+        return canonical
+    return _legacy_session_head_dir(git_root, branch, head_sha)
+
+
+def _session_marker_write_dir(git_root: Path, branch: str, head_sha: str) -> Path:
+    return _canonical_session_head_dir(git_root, branch, head_sha)
+
+
+def _verdict_read_path(git_root: Path) -> Path:
+    canonical = git_root / REVIEW_DIR / CANONICAL_VERDICT
+    if canonical.is_file():
+        return canonical
+    return git_root / VERDICT_FILE
+
+
+def _verdict_write_path(git_root: Path) -> Path:
+    return git_root / REVIEW_DIR / CANONICAL_VERDICT
+
+
+def _session_summary_read_path(git_root: Path) -> Path:
+    canonical = git_root / REVIEW_DIR / CANONICAL_SESSION_SUMMARY
+    if canonical.is_file():
+        return canonical
+    return git_root / SESSION_FILE
+
+
+def _session_summary_write_path(git_root: Path) -> Path:
+    return git_root / REVIEW_DIR / CANONICAL_SESSION_SUMMARY
+
+
+def _warn_legacy_def09_paths(git_root: Path, branch: str, head_sha: str) -> None:
+    legacy_dir = _legacy_session_head_dir(git_root, branch, head_sha)
+    canonical_dir = _canonical_session_head_dir(git_root, branch, head_sha)
+    legacy_verdict = git_root / VERDICT_FILE
+    canonical_verdict = git_root / REVIEW_DIR / CANONICAL_VERDICT
+    legacy_only = (
+        _session_dir_has_markers(legacy_dir)
+        and not _session_dir_has_markers(canonical_dir)
+    ) or (legacy_verdict.is_file() and not canonical_verdict.is_file())
+    if legacy_only:
+        print(
+            f"MAP_DEF09: legacy review paths detected under {git_root}; "
+            f"migrate with scripts/migrate_map_state.py (removal planned {DEF09_SUNSET_VERSION})",
+            file=sys.stderr,
+        )
+
+
 def _marker_payloads(git_root: Path, branch: str, head_sha: str) -> list[dict[str, Any]]:
-    head_dir = _session_head_dir(git_root, branch, head_sha)
+    head_dir = _session_marker_read_dir(git_root, branch, head_sha)
     if not head_dir.is_dir():
         return []
     payloads: list[dict[str, Any]] = []
@@ -624,7 +686,7 @@ def _marker_payloads(git_root: Path, branch: str, head_sha: str) -> list[dict[st
 
 
 def _write_marker(git_root: Path, branch: str, head_sha: str, data: dict[str, Any]) -> None:
-    head_dir = _session_head_dir(git_root, branch, head_sha)
+    head_dir = _session_marker_write_dir(git_root, branch, head_sha)
     head_dir.mkdir(parents=True, exist_ok=True)
     data = _seal_marker(data)
     raw = json.dumps(data, sort_keys=True)
@@ -643,12 +705,15 @@ def _write_session_summary(git_root: Path, branch: str, head_sha: str) -> None:
     markers = _marker_payloads(git_root, branch, head_sha)
     summary = {
         "authoritative": False,
-        "note": f"Derived from {SESSION_DIR}; merge gate validates marker files, not this summary.",
+        "note": (
+            f"Derived from {REVIEW_DIR}/{CANONICAL_SESSION_SUBDIR}/; "
+            "merge gate validates marker files, not this summary."
+        ),
         "branch": branch,
         "head_sha": head_sha,
         "subagents": markers,
     }
-    _write_json_file(git_root / SESSION_FILE, summary)
+    _write_json_file(_session_summary_write_path(git_root), summary)
 
 
 def _completed_types(markers: list[dict[str, Any]], allowed: set[str]) -> set[str]:
@@ -974,7 +1039,9 @@ def validate_review_state(
             if not _security_code_modified(git_root, config):
                 return True, "Security audit report-only.", "Security audit report-only."
 
-    verdict_path = git_root / VERDICT_FILE
+    _warn_legacy_def09_paths(git_root, branch, head_sha)
+
+    verdict_path = _verdict_read_path(git_root)
     verdict = _read_json_file(verdict_path)
     markers = _marker_payloads(git_root, branch, head_sha)
     invalid_markers = [
@@ -1004,15 +1071,17 @@ def validate_review_state(
     if not markers:
         return (
             False,
-            f"Multi-model review required before merge. Missing review markers under {SESSION_DIR}.",
+            f"Multi-model review required before merge. Missing review markers under "
+            f"{REVIEW_DIR}/{CANONICAL_SESSION_SUBDIR}/ or {SESSION_DIR}.",
             "BLOCKED: Launch required subagents first.",
         )
 
     if verdict is None:
         return (
             False,
-            "Multi-model review required before merge. Missing .review-verdict.json.",
-            "BLOCKED: After review synthesis, write .review-verdict.json.",
+            "Multi-model review required before merge. Missing review verdict "
+            f"({REVIEW_DIR}/{CANONICAL_VERDICT} or {VERDICT_FILE}).",
+            f"BLOCKED: After review synthesis, write {REVIEW_DIR}/{CANONICAL_VERDICT}.",
         )
 
     if verdict.get("branch") != branch:
@@ -1983,7 +2052,8 @@ def record_subagent_from_hook(data: dict[str, Any], raw: str) -> dict[str, Any]:
     if subagent_type == "coder":
         return {
             "followup_message": (
-                f"Coder recorded under {SESSION_DIR}. Launch required Reviewer subagent(s) before merge."
+                f"Coder recorded under {REVIEW_DIR}/{CANONICAL_SESSION_SUBDIR}/. "
+                f"Launch required Reviewer subagent(s) before merge."
             )
         }
 
