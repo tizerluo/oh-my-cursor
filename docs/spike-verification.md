@@ -11,8 +11,9 @@ Run manually or observe during Cursor sessions. Logs under this directory.
 ## Usage
 
 ```bash
-echo '{}' | python3 ~/.cursor/hooks/spikes/spike_stop_hook.py
-echo '{"workspace_roots":["/path/to/repo"]}' | python3 ~/.cursor/hooks/spikes/spike_session_start.py
+export OMC_ROOT=/path/to/oh-my-cursor
+echo '{}' | python3 "$OMC_ROOT/hooks/spikes/spike_stop_hook.py"
+echo '{"workspace_roots":["/path/to/repo"]}' | python3 "$OMC_ROOT/hooks/spikes/spike_session_start.py"
 ```
 
 Replace hooks.json commands temporarily with spike wrappers to capture live payloads.
@@ -55,7 +56,7 @@ If `phase=synthesis-complete` and fix-queue has pending P0/P1, **every stop** ma
 
 1. In `issue-to-pr`, click **New Chat** (new Agent session)
 2. Optional first message: `hello` (any prompt)
-3. Tell the agent to check: `~/.cursor/hooks/spikes/session-start.log` last line
+3. Tell the agent to check: `$OMC_ROOT/hooks/spikes/session-start.log` last line
 4. Look for routing hint in injected context (draft spec: `.specs/spike-test.md`)
 
 ## Results (legacy)

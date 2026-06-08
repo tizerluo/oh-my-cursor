@@ -319,7 +319,7 @@ title: PR N — short title
 ---
 ```
 
-Schema: `~/.cursor/hooks/schemas/spec-frontmatter.schema.json`
+Schema: `hooks/schemas/spec-frontmatter.schema.json` (under `$OMC_ROOT`)
 
 Body must include:
 - Goal (numbered list of deliverables)
@@ -530,7 +530,7 @@ Commander drives manually. Stop hook at `synthesis-complete` may emit a one-time
 **After each fix-review cycle**, advance queue state (resets phase to `synthesis-complete` for stop hook):
 
 ```bash
-python3 ~/.cursor/hooks/review_gate.py advance-fix-queue /path/to/repo resolved-id-1,resolved-id-2 --increment-round
+python3 "$OMC_ROOT/hooks/review_gate.py" advance-fix-queue /path/to/repo resolved-id-1,resolved-id-2 --increment-round
 ```
 
 **Exit conditions:**

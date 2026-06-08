@@ -70,7 +70,7 @@ config-confirmed → draft → critics → debate → revise → accepted → me
 }
 ```
 
-Schema: `~/.cursor/hooks/schemas/debate-round.schema.json`
+Schema: `hooks/schemas/debate-round.schema.json` (under `$OMC_ROOT`)
 4. **Revise** — update spec; increment round until `max_rounds` or consensus
 5. **Accepted** — set spec frontmatter `status: accepted`
 6. **Merge back** — fuse accepted spec + debate conclusions into the **original Plan-mode document** (`.cursor/plans/*.plan.md`); update todos, estimates, DoD. Add `implementation_plan` in spec frontmatter pointing to the plan. `.specs/` remains audit archive only.
@@ -94,7 +94,7 @@ Commander drives revise → critics loop manually.
 After resolving critic items:
 
 ```bash
-python3 ~/.cursor/hooks/review_gate.py advance-critic-queue /path/to/repo security,P1-item --increment-round
+python3 "$OMC_ROOT/hooks/review_gate.py" advance-critic-queue /path/to/repo security,P1-item --increment-round
 ```
 
 Stop hook at `phase=revise` emits critic-queue followup when pending items exist.

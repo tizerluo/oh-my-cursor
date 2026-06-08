@@ -42,4 +42,4 @@ Do not set `disable-model-invocation: true` unless skill misfires on unrelated p
 
 - [docs/workflows/plan-then-hyperplan.md](../docs/workflows/plan-then-hyperplan.md) — **Plan → Hyperplan → merge back** (required reading)
 - [routing-rules.example.json](../multi-agent-pr/routing-rules.example.json)
-- [review_gate.py load_routing_rules](~/.cursor/hooks/review_gate.py)
+- [review_gate.py load_routing_rules](../hooks/review_gate.py)

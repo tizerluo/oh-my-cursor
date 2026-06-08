@@ -41,7 +41,7 @@ See [multi-agent-pr SKILL §8b](../multi-agent-pr/SKILL.md) for Commander steps.
 After a fix-review or regression retry cycle:
 
 ```bash
-python3 ~/.cursor/hooks/review_gate.py advance-fix-queue /path/to/repo [resolved-id,...] --increment-round
+python3 "$OMC_ROOT/hooks/review_gate.py" advance-fix-queue /path/to/repo [resolved-id,...] --increment-round
 ```
 
 ## False positive process
