@@ -7,9 +7,11 @@ import fnmatch
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import hashlib
 import hmac
 import secrets
@@ -164,7 +166,7 @@ def _secret() -> bytes:
         migrate_legacy_secret_if_needed(path)
         if path.is_file():
             return _read_secret_bytes(path)
-        return _create_secret_file(path)
+        _secret_fail(f"secret file missing: {path}")
     except SecretError as exc:
         _secret_fail(str(exc))
     except OSError as exc:
@@ -199,9 +201,9 @@ DANGEROUS_SHELL_PATTERN = re.compile(
 )
 SHELL_WRITE_PATTERN = re.compile(
     r"(?:^|[;&|]\s*)(?:[^\n]*\s)?(?:>|>>)\s*(?!/dev/null\b)"
-    r"|\btee\s+(?:-a\s+)?"
+    r"|\btee\s+(?:-a\s+)?(?!-)\S"
     r"|\bsponge\s+"
-    r"\b(?:cat|python3?|node|ruby|perl)\b[^\n]*(?:>|>>)\s*"
+    r"|\b(?:cat|python3?|node|ruby|perl)\b[^\n]*(?:>|>>)\s*"
     r"|<<-?\s*['\"]?\w+['\"]?\s*$"
     r"|\b(?:sed|awk)\b[^\n]*\s-i\b"
     r"|\b(?:cp|mv|install|touch|mkdir)\s+",
@@ -330,8 +332,29 @@ WORKFLOW_STOP_PHASES: dict[str, str | None] = {
 }
 
 ROUTING_RULES_FALLBACK = (
-    Path.home() / ".cursor" / "skills" / "multi-agent-pr" / "routing-rules.example.json"
+    HOOKS_DIR.parent / "skills" / "multi-agent-pr" / "routing-rules.example.json"
 )
+_SUBPROCESS_TIMEOUT = 10
+
+
+def _run_subprocess(
+    cmd: list[str],
+    *,
+    cwd: str | None = None,
+    text: bool = True,
+) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[bytes]:
+    try:
+        return subprocess.run(
+            cmd,
+            capture_output=True,
+            text=text,
+            cwd=cwd,
+            timeout=_SUBPROCESS_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(cmd, returncode=124, stdout="", stderr="")
+
+
 QUARANTINE_FILE = "quarantine-tests.json"
 ROUTING_THRESHOLDS = {
     "todo_fixme_count": 20,
@@ -484,79 +507,57 @@ def _event_looks_like_subagent_stop(data: dict[str, Any]) -> bool:
 
 def _git_root(cwd: str) -> Path | None:
     try:
-        result = subprocess.run(
-            ["git", "-C", cwd, "rev-parse", "--show-toplevel"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        result = _run_subprocess(["git", "-C", cwd, "rev-parse", "--show-toplevel"])
+        if result.returncode != 0:
+            return None
         root = result.stdout.strip()
         return Path(root) if root else None
-    except (subprocess.CalledProcessError, OSError):
+    except OSError:
         return None
 
 
 def _git_branch(cwd: str) -> str:
     try:
-        result = subprocess.run(
-            ["git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        result = _run_subprocess(["git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"])
+        if result.returncode != 0:
+            return ""
         return result.stdout.strip()
-    except (subprocess.CalledProcessError, OSError):
+    except OSError:
         return ""
 
 
 def _git_head(cwd: str) -> str:
     try:
-        result = subprocess.run(
-            ["git", "-C", cwd, "rev-parse", "HEAD"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        result = _run_subprocess(["git", "-C", cwd, "rev-parse", "HEAD"])
+        if result.returncode != 0:
+            return ""
         return result.stdout.strip()
-    except (subprocess.CalledProcessError, OSError):
+    except OSError:
         return ""
 
 
 def _git_tree(cwd: str) -> str:
     try:
-        result = subprocess.run(
-            ["git", "-C", cwd, "rev-parse", "HEAD^{tree}"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        result = _run_subprocess(["git", "-C", cwd, "rev-parse", "HEAD^{tree}"])
+        if result.returncode != 0:
+            return ""
         return result.stdout.strip()
-    except (subprocess.CalledProcessError, OSError):
+    except OSError:
         return ""
 
 
 def _git_diff_files(cwd: str) -> list[str]:
     bases = ["origin/main", "origin/master", "main", "master", "HEAD~1"]
     for base in bases:
-        merge_base = subprocess.run(
-            ["git", "-C", cwd, "merge-base", "HEAD", base],
-            capture_output=True,
-            text=True,
-        )
+        merge_base = _run_subprocess(["git", "-C", cwd, "merge-base", "HEAD", base])
         if merge_base.returncode != 0 or not merge_base.stdout.strip():
             continue
-        result = subprocess.run(
-            ["git", "-C", cwd, "diff", "--name-only", merge_base.stdout.strip(), "HEAD"],
-            capture_output=True,
-            text=True,
+        result = _run_subprocess(
+            ["git", "-C", cwd, "diff", "--name-only", merge_base.stdout.strip(), "HEAD"]
         )
         if result.returncode == 0:
             return [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    result = subprocess.run(
-        ["git", "-C", cwd, "diff", "--name-only", "HEAD~1", "HEAD"],
-        capture_output=True,
-        text=True,
-    )
+    result = _run_subprocess(["git", "-C", cwd, "diff", "--name-only", "HEAD~1", "HEAD"])
     if result.returncode == 0:
         return [line.strip() for line in result.stdout.splitlines() if line.strip()]
     return []
@@ -574,9 +575,17 @@ def _read_json_file(path: Path) -> dict[str, Any] | None:
 
 def _write_json_file(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp.replace(path)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(data, indent=2, sort_keys=True) + "\n")
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
 
 
 def _review_path(git_root: Path, name: str) -> Path:
@@ -696,6 +705,7 @@ def _write_marker(git_root: Path, branch: str, head_sha: str, data: dict[str, An
     try:
         fd = os.open(marker, flags, 0o600)
     except FileExistsError:
+        print("MAP_GATE: marker already exists (idempotent skip)", file=sys.stderr)
         return
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(json.dumps(data, indent=2, sort_keys=True) + "\n")
@@ -794,11 +804,28 @@ def _tier_rank(tier: str) -> int:
     return {"hotfix": 0, "standard": 1, "large": 2}.get(tier, 1)
 
 
-def _path_allowed(path: str, allowed_prefixes: list[str] | None) -> bool:
+def _path_allowed(
+    path: str,
+    allowed_prefixes: list[str] | None,
+    git_root: Path | None = None,
+) -> bool:
     if allowed_prefixes is None:
         return True
     normalized = path.replace("\\", "/")
-    return any(normalized.startswith(prefix) for prefix in allowed_prefixes)
+    if git_root is not None:
+        try:
+            if normalized.startswith("/") or (len(normalized) > 1 and normalized[1] == ":"):
+                candidate = Path(normalized).resolve()
+            else:
+                candidate = (git_root / normalized).resolve()
+            rel = candidate.relative_to(git_root.resolve())
+            normalized = str(rel).replace("\\", "/")
+        except (ValueError, OSError):
+            return False
+    return any(
+        normalized.startswith(prefix) or normalized == prefix.rstrip("/")
+        for prefix in allowed_prefixes
+    )
 
 
 def _path_in_scope(path: str, scope_paths: list[str]) -> bool:
@@ -871,12 +898,14 @@ def _task_prompt(data: dict[str, Any]) -> str:
     return prompt if isinstance(prompt, str) else ""
 
 
-def _map_exempt_task(data: dict[str, Any]) -> bool:
+def _map_exempt_task(data: dict[str, Any], workflow: str = "") -> bool:
     if _task_readonly(data):
         return True
     subagent_type = _task_subagent_type(data)
-    if subagent_type == "generalPurpose" and re.search(
-        r"\b(review|audit|mmr|multi-model)\b", _task_prompt(data), re.I
+    if (
+        workflow == "map-hyperplan"
+        and subagent_type == "generalPurpose"
+        and re.search(r"\b(review|audit|mmr|multi-model)\b", _task_prompt(data), re.I)
     ):
         return True
     return False
@@ -917,8 +946,10 @@ def _shell_write_blocked(command: str, logical_role: str) -> bool:
     return bool(SHELL_WRITE_PATTERN.search(command))
 
 
-def _code_outside_allowed(changed: list[str], allowed_prefixes: list[str]) -> list[str]:
-    return [p for p in changed if not _path_allowed(p, allowed_prefixes)]
+def _code_outside_allowed(
+    changed: list[str], allowed_prefixes: list[str], git_root: Path | None = None
+) -> list[str]:
+    return [p for p in changed if not _path_allowed(p, allowed_prefixes, git_root)]
 
 
 def _security_code_modified(git_root: Path, config: dict[str, Any]) -> bool:
@@ -951,7 +982,8 @@ def _validate_config_cross_check(
     if workflow not in WORKFLOW_GATE_PROFILES:
         return False, "Invalid workflow in .review/config.json.", f"BLOCKED: unknown workflow={workflow!r}."
 
-    if workflow not in MERGE_GATE_WORKFLOWS:
+    profile = WORKFLOW_GATE_PROFILES[workflow]
+    if profile.get("merge_gate_required") is False:
         return True, "", ""
 
     config_tier = str(config.get("tier") or verdict.get("tier") or "standard").lower()
@@ -973,6 +1005,15 @@ def _validate_config_cross_check(
     if isinstance(config_models, list):
         verdict_reviewers = verdict.get("reviewers") or []
         if isinstance(verdict_reviewers, list):
+            reviewer_claims: set[str] = set()
+            for entry in verdict_reviewers:
+                if isinstance(entry, str):
+                    reviewer_claims.add(entry)
+                elif isinstance(entry, dict):
+                    for key in ("type", "model"):
+                        value = entry.get(key)
+                        if isinstance(value, str):
+                            reviewer_claims.add(value)
             missing = [
                 m
                 for m in verdict_reviewers
@@ -983,6 +1024,17 @@ def _validate_config_cross_check(
                     False,
                     "Verdict reviewers not covered by config.models.",
                     f"BLOCKED: verdict lists {missing} not in config.",
+                )
+            missing_from_verdict = [
+                m
+                for m in config_models
+                if isinstance(m, str) and m not in reviewer_claims
+            ]
+            if missing_from_verdict and config.get("active"):
+                return (
+                    False,
+                    "Config models missing from verdict reviewers.",
+                    f"BLOCKED: config requires {missing_from_verdict}.",
                 )
     return True, "", ""
 
@@ -1001,7 +1053,7 @@ def _validate_planning_only_session(
         )
     allowed = profile.get("allowed_write_paths") or [".specs/", ".review/"]
     changed = _git_diff_files(str(git_root))
-    outside = _code_outside_allowed(changed, allowed)
+    outside = _code_outside_allowed(changed, allowed, git_root)
     if outside:
         return (
             False,
@@ -1293,13 +1345,17 @@ def advance_fix_queue(
     progress["updated_at"] = _now_iso()
     _write_json_file(progress_path, progress)
 
+    queue_round = fix_queue.get("round") if queue_action == "updated" else None
+    progress_fix_round = int(progress.get("fix_round") or 0)
     return {
         "ok": True,
         "queue_action": queue_action,
         "p0_remaining": len(p0),
         "p1_remaining": len(p1),
         "phase": progress["phase"],
-        "round": fix_queue.get("round") if queue_action == "updated" else int(progress.get("fix_round") or 0),
+        "queue_round": queue_round,
+        "progress_fix_round": progress_fix_round,
+        "round": int(queue_round or 0) if queue_action == "updated" else progress_fix_round,
     }
 
 
@@ -1525,28 +1581,31 @@ def _routing_thresholds(config: dict[str, Any] | None) -> dict[str, int]:
 
 def _count_todo_fixme_threshold(git_root: Path, threshold: int) -> bool:
     try:
-        result = subprocess.run(
-            ["rg", "-c", r"TODO|FIXME", str(git_root)],
-            capture_output=True,
-            text=True,
-        )
+        result = _run_subprocess(["rg", "-c", r"TODO|FIXME", str(git_root)])
         if result.returncode not in (0, 1):
+            if result.returncode == 124:
+                print("MAP_GATE: rg timed out for TODO/FIXME count", file=sys.stderr)
+            elif shutil.which("rg") is None:
+                print("MAP_GATE: rg not found; skipping TODO/FIXME routing hint", file=sys.stderr)
             return False
         total = sum(int(line.split(":")[-1]) for line in result.stdout.splitlines() if ":" in line)
         return total >= threshold
     except OSError:
+        print("MAP_GATE: rg failed for TODO/FIXME count", file=sys.stderr)
         return False
 
 
 def _security_issue_count(git_root: Path, min_count: int) -> bool:
     try:
-        result = subprocess.run(
+        result = _run_subprocess(
             ["gh", "issue", "list", "--label", "security", "--limit", "10", "--json", "number"],
             cwd=str(git_root),
-            capture_output=True,
-            text=True,
         )
         if result.returncode != 0:
+            if result.returncode == 124:
+                print("MAP_GATE: gh issue list timed out", file=sys.stderr)
+            elif shutil.which("gh") is None:
+                print("MAP_GATE: gh not found; skipping security issue routing hint", file=sys.stderr)
             return False
         items = json.loads(result.stdout or "[]")
         return isinstance(items, list) and len(items) >= min_count
@@ -1684,21 +1743,6 @@ def stop_check_from_hook(data: dict[str, Any]) -> dict[str, Any]:
     return _critic_queue_followup(git_root, config)
 
 
-def _count_todo_fixme(git_root: Path, threshold: int = 20) -> bool:
-    try:
-        result = subprocess.run(
-            ["rg", "-c", r"TODO|FIXME", str(git_root)],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode not in (0, 1):
-            return False
-        total = sum(int(line.split(":")[-1]) for line in result.stdout.splitlines() if ":" in line)
-        return total >= threshold
-    except OSError:
-        return False
-
-
 def _draft_specs(git_root: Path) -> list[str]:
     specs_root = git_root / SPECS_DIR
     if not specs_root.is_dir():
@@ -1754,10 +1798,10 @@ def session_resume_from_hook(data: dict[str, Any]) -> dict[str, Any]:
     if progress and config and config.get("active"):
         if progress.get("branch") == ctx["branch"]:
             parts.append(
-                f"检测到中断的 MAP pipeline (session {config.get('session_id')}). "
+                f"Interrupted MAP pipeline detected (session {config.get('session_id')}). "
                 f"workflow={config.get('workflow', 'multi-agent-pr')}. "
-                f"当前 phase={progress.get('phase')}. "
-                f"已完成: {progress.get('completed')}. 请从当前阶段继续。"
+                f"phase={progress.get('phase')}. "
+                f"completed={progress.get('completed')}. Resume from the current phase."
             )
 
     hints = _routing_hints(git_root, config, str(data.get("user_message") or data.get("prompt") or ""))
@@ -1892,6 +1936,7 @@ def check_tool_permission_from_hook(data: dict[str, Any]) -> dict[str, Any]:
         return {"permission": "allow"}
 
     norm_path = path.replace("\\", "/")
+    git_root = ctx["git_root"]
 
     if role.startswith("reviewer-"):
         return {
@@ -1908,23 +1953,23 @@ def check_tool_permission_from_hook(data: dict[str, Any]) -> dict[str, Any]:
         }
 
     if role == "generalPurpose" and workflow == "map-hyperplan":
-        if not _path_allowed(norm_path, [".review/reports/", ".review/"]):
+        if not _path_allowed(norm_path, [".review/reports/", ".review/"], git_root):
             return {
                 "permission": "deny",
                 "user_message": "Critics may only write under .review/reports/.",
                 "agent_message": "BLOCKED: critic write path.",
             }
 
-    if role == "architect":
-        if not _path_allowed(norm_path, [".specs/", ".review/", SPECS_DIR + "/"]):
+    if role in {"architect", "planner"}:
+        if not _path_allowed(norm_path, [".specs/", ".review/", SPECS_DIR + "/"], git_root):
             return {
                 "permission": "deny",
-                "user_message": "Architect may only write under .specs/ and .review/.",
-                "agent_message": "BLOCKED: architect write path.",
+                "user_message": "Architect/planner may only write under .specs/ and .review/.",
+                "agent_message": "BLOCKED: architect/planner write path.",
             }
 
     if role == "tester-writer":
-        if not _path_allowed(norm_path, ["tests/", "test/"]):
+        if not _path_allowed(norm_path, ["tests/", "test/"], git_root):
             return {
                 "permission": "deny",
                 "user_message": "Tester may only write under tests/.",
@@ -1933,7 +1978,7 @@ def check_tool_permission_from_hook(data: dict[str, Any]) -> dict[str, Any]:
 
     if role == "poc-exploit" or (role == "coder" and workflow == "map-security"):
         sandbox = str(config.get("poc_sandbox", POC_DIR)).rstrip("/") + "/"
-        if role == "poc-exploit" and not _path_allowed(norm_path, [sandbox, ".review/poc/"]):
+        if role == "poc-exploit" and not _path_allowed(norm_path, [sandbox, ".review/poc/"], git_root):
             return {
                 "permission": "deny",
                 "user_message": f"PoC exploit writes limited to {sandbox}.",
@@ -1957,14 +2002,14 @@ def check_task_alignment_from_hook(data: dict[str, Any]) -> dict[str, Any]:
     if not config or not config.get("active") or not config.get("session_id"):
         return {"permission": "allow"}
 
-    if _map_exempt_task(data):
+    workflow = str(config.get("workflow") or "multi-agent-pr")
+
+    if _map_exempt_task(data, workflow):
         return {"permission": "allow"}
 
     subagent_type = _task_subagent_type(data)
     if not subagent_type:
         return {"permission": "allow"}
-
-    workflow = str(config.get("workflow") or "multi-agent-pr")
     if not _is_map_managed_role(subagent_type, workflow):
         return {"permission": "allow"}
 

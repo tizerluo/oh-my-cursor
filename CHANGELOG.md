@@ -4,6 +4,30 @@ All notable changes to **oh-my-cursor** are documented here.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.0.1] - 2026-06-09
+
+### Fixed
+
+- **R01** `MERGE_GATE_WORKFLOWS` NameError: cross-check skip uses `merge_gate_required is False` profile guard
+- **R02** `_secret()` fail-closed at hook runtime (no auto-create); install/doctor still bootstrap via `bootstrap_secret()`
+- **R03–R04** Shell wired to `check-tool-permission`; `SHELL_WRITE_PATTERN` regex (`sponge`, `tee`) fixed
+- **R05** `ROUTING_RULES_FALLBACK` uses package-relative path (CI routing tests pass on clean `HOME`)
+- **R06–R07** `planner` Write path limits; `_path_allowed` resolves paths against `git_root`
+- **R08–R10** Hooks template: `planner`/`tester-writer` matchers, shell-quoted commands, `omc` MAP allowlist + dedupe
+- **R11** `migrate_map_state.py` rollback removes copied session directories
+- **R12–R16** `_map_exempt_task` scoped to map-hyperplan; subprocess timeouts; config.models bidirectional check
+- **R19–R29** Marker idempotent stderr; `_write_json_file` atomic temp; English session-resume; dead code removed
+
+### Changed
+
+- Hooks template: 11 MAP entries (Shell permission + merge), `omc: true` on all MAP hooks
+- `omc doctor` expects template MAP count; duplicate detection uses `(command, matcher)` pairs
+- Skills/docs: canonical `.review/` write paths emphasized
+
+### Tests
+
+- 98+ tests including `test_merge_gate_e2e.py`, migrate rollback, install quote/allowlist
+
 ## [1.0.0] - 2026-06-08
 
 ### Added

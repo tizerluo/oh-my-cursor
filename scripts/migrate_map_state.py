@@ -114,10 +114,17 @@ def _rollback(manifest_path: Path) -> None:
         dest = Path(action["dest"])
         if not dest.exists():
             continue
-        if action["kind"] == "session_dir" and action.get("mode") == "move":
-            if src.exists():
-                raise MigrateError(f"rollback blocked: legacy session restored path exists: {src}")
-            shutil.move(str(dest), str(src))
+        if action["kind"] == "session_dir":
+            if action.get("mode") == "move":
+                if src.exists():
+                    raise MigrateError(
+                        f"rollback blocked: legacy session restored path exists: {src}"
+                    )
+                shutil.move(str(dest), str(src))
+            elif dest.is_dir():
+                shutil.rmtree(dest)
+            else:
+                dest.unlink(missing_ok=True)
         else:
             dest.unlink(missing_ok=True)
     manifest_path.unlink(missing_ok=True)

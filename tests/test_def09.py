@@ -32,6 +32,22 @@ def load_migrate():
     return module
 
 
+class SecretBootstrapMixin:
+    """Isolate tests from host secret / OMC_SECRET_FILE (R02 fail-closed)."""
+
+    def _bootstrap_secret(self, rg) -> None:
+        self._secret_tmp = tempfile.TemporaryDirectory()
+        secret = Path(self._secret_tmp.name) / "secret"
+        rg.bootstrap_secret(secret)
+        os.environ["OMC_SECRET_FILE"] = str(secret)
+
+    def _clear_secret_env(self) -> None:
+        os.environ.pop("OMC_SECRET_FILE", None)
+        if hasattr(self, "_secret_tmp"):
+            self._secret_tmp.cleanup()
+            del self._secret_tmp
+
+
 def write_marker_file(rg, head_dir: Path, subagent_type: str, branch: str, head_sha: str) -> None:
     head_dir.mkdir(parents=True, exist_ok=True)
     data = rg._seal_marker(
@@ -47,9 +63,13 @@ def write_marker_file(rg, head_dir: Path, subagent_type: str, branch: str, head_
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
-class Def09PathTests(unittest.TestCase):
+class Def09PathTests(SecretBootstrapMixin, unittest.TestCase):
     def setUp(self):
         self.rg = load_review_gate()
+        self._bootstrap_secret(self.rg)
+
+    def tearDown(self):
+        self._clear_secret_env()
 
     def test_read_prefers_canonical_markers(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -107,10 +127,13 @@ class Def09PathTests(unittest.TestCase):
             self.assertEqual(self.rg._verdict_read_path(root), write_path)
 
 
-class Def09ValidateTests(unittest.TestCase):
+class Def09ValidateTests(SecretBootstrapMixin, unittest.TestCase):
     def setUp(self):
         self.rg = load_review_gate()
         os.environ.pop("OMC_SECRET_FILE", None)
+
+    def tearDown(self):
+        self._clear_secret_env()
 
     def _hotfix_pass_fixtures(self, root: Path, branch: str, sha: str, marker_dir: Path, verdict_path: Path):
         write_marker_file(self.rg, marker_dir, "coder", branch, sha)
@@ -161,10 +184,14 @@ class Def09ValidateTests(unittest.TestCase):
             self.assertTrue(ok, msg)
 
 
-class MigrateMapStateTests(unittest.TestCase):
+class MigrateMapStateTests(SecretBootstrapMixin, unittest.TestCase):
     def setUp(self):
         self.migrate = load_migrate()
         self.rg = load_review_gate()
+        self._bootstrap_secret(self.rg)
+
+    def tearDown(self):
+        self._clear_secret_env()
 
     def test_dry_run_lists_actions(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -216,6 +243,23 @@ class MigrateMapStateTests(unittest.TestCase):
             (root / ".review-session").mkdir()
             with self.assertRaises(self.migrate.MigrateError):
                 self.migrate.migrate(root, apply=False, destructive=False, force=False, confirm=None)
+
+    def test_rollback_after_apply_copy_removes_canonical_session(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            branch, sha = "main", "abc"
+            legacy_dir = root / ".review-session" / branch / sha
+            write_marker_file(self.rg, legacy_dir, "coder", branch, sha)
+            manifest = self.migrate.migrate(
+                root, apply=True, destructive=False, force=False, confirm=None
+            )
+            canonical = root / ".review" / "session" / branch / sha
+            self.assertTrue(canonical.is_dir())
+            manifest_path = root / ".review" / "migrate-manifest.json"
+            self.assertTrue(manifest_path.is_file())
+            self.migrate._rollback(manifest_path)
+            self.assertFalse(canonical.exists())
+            self.assertTrue(legacy_dir.is_dir())
 
 
 if __name__ == "__main__":

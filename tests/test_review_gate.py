@@ -260,12 +260,4 @@ class KnowledgeValidationTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    loader = unittest.TestLoader()
-    suite = unittest.TestSuite()
-    suite.addTests(loader.loadTestsFromModule(sys.modules[__name__]))
-    import test_mmr_fixes as mmr  # noqa: E402
-
-    suite.addTests(loader.loadTestsFromModule(mmr))
-    runner = unittest.TextTestRunner(verbosity=2)
-    result = runner.run(suite)
-    raise SystemExit(0 if result.wasSuccessful() else 1)
+    unittest.main()

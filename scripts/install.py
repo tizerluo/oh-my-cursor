@@ -9,6 +9,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import shutil
 import sys
 import tempfile
@@ -33,9 +34,44 @@ class InstallError(Exception):
     pass
 
 
-def is_map_hook_entry(entry: dict[str, Any]) -> bool:
+def is_map_hook_entry(
+    entry: dict[str, Any],
+    review_gate_path: Path | str | None = None,
+) -> bool:
+    if entry.get("omc") is True:
+        return True
     command = entry.get("command")
-    return isinstance(command, str) and REVIEW_GATE_MARKER in command
+    if not isinstance(command, str) or not command.strip().startswith("python3 "):
+        return False
+    if review_gate_path is not None:
+        gate = str(review_gate_path)
+        return gate in command
+    return REVIEW_GATE_MARKER in command
+
+
+def expected_map_hook_count(review_gate_path: Path | None = None) -> int:
+    gate = review_gate_path or (OMC_ROOT / "hooks" / "review_gate.py")
+    rendered = render_map_hooks(gate)
+    return sum(
+        len(entries)
+        for entries in rendered.get("hooks", {}).values()
+        if isinstance(entries, list)
+    )
+
+
+def _dedupe_hook_entries(entries: list[dict[str, Any]], review_gate_path: Path) -> list[dict[str, Any]]:
+    seen_map_keys: set[tuple[str, str]] = set()
+    deduped: list[dict[str, Any]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        if is_map_hook_entry(entry, review_gate_path):
+            key = (str(entry.get("command", "")), str(entry.get("matcher", "")))
+            if key in seen_map_keys:
+                continue
+            seen_map_keys.add(key)
+        deduped.append(entry)
+    return deduped
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -54,7 +90,10 @@ def render_map_hooks(review_gate_path: Path) -> dict[str, Any]:
     if not TEMPLATE_PATH.is_file():
         raise InstallError(f"Missing template: {TEMPLATE_PATH}")
     raw = TEMPLATE_PATH.read_text(encoding="utf-8")
-    rendered_text = raw.replace("{{REVIEW_GATE_PATH}}", str(review_gate_path))
+    quoted = shlex.quote(str(review_gate_path))
+    rendered_text = raw.replace("{{REVIEW_GATE_QUOTED_PATH}}", quoted)
+    if "{{REVIEW_GATE_PATH}}" in rendered_text:
+        rendered_text = rendered_text.replace("{{REVIEW_GATE_PATH}}", str(review_gate_path))
     try:
         data = json.loads(rendered_text)
     except json.JSONDecodeError as exc:
@@ -62,7 +101,12 @@ def render_map_hooks(review_gate_path: Path) -> dict[str, Any]:
     return data
 
 
-def merge_hooks(existing: dict[str, Any], map_hooks: dict[str, Any]) -> dict[str, Any]:
+def merge_hooks(
+    existing: dict[str, Any],
+    map_hooks: dict[str, Any],
+    *,
+    review_gate_path: Path | None = None,
+) -> dict[str, Any]:
     """Merge MAP hook entries; preserve all non-MAP entries unchanged."""
     merged = json.loads(json.dumps(existing))
     existing_hooks = merged.get("hooks")
@@ -76,15 +120,17 @@ def merge_hooks(existing: dict[str, Any], map_hooks: dict[str, Any]) -> dict[str
     if not isinstance(map_hook_events, dict):
         raise InstallError("Rendered MAP hooks: hooks must be an object")
 
+    gate_path = review_gate_path or (OMC_ROOT / "hooks" / "review_gate.py")
+
     for event, entries in existing_hooks.items():
         if event in map_hook_events:
             if not isinstance(entries, list):
                 raise InstallError(f"hooks.json: hooks.{event} must be an array")
-            non_map = [e for e in entries if not is_map_hook_entry(e)]
+            non_map = [e for e in entries if not is_map_hook_entry(e, gate_path)]
             map_entries = map_hook_events[event]
             if not isinstance(map_entries, list):
                 raise InstallError(f"MAP template: hooks.{event} must be an array")
-            existing_hooks[event] = non_map + map_entries
+            existing_hooks[event] = _dedupe_hook_entries(non_map + map_entries, gate_path)
 
     for event, map_entries in map_hook_events.items():
         if event not in existing_hooks:
@@ -96,20 +142,27 @@ def merge_hooks(existing: dict[str, Any], map_hooks: dict[str, Any]) -> dict[str
     return merged
 
 
-def validate_non_map_preserved(before: dict[str, Any], after: dict[str, Any]) -> None:
+def validate_non_map_preserved(
+    before: dict[str, Any],
+    after: dict[str, Any],
+    *,
+    review_gate_path: Path | None = None,
+) -> None:
     before_hooks = before.get("hooks", {})
     after_hooks = after.get("hooks", {})
     if not isinstance(before_hooks, dict) or not isinstance(after_hooks, dict):
         raise InstallError("hooks.json structure invalid during merge validation")
 
+    gate_path = review_gate_path or (OMC_ROOT / "hooks" / "review_gate.py")
+
     for event, entries in before_hooks.items():
         if not isinstance(entries, list):
             continue
-        non_map_before = [e for e in entries if not is_map_hook_entry(e)]
+        non_map_before = [e for e in entries if not is_map_hook_entry(e, gate_path)]
         after_entries = after_hooks.get(event, [])
         if not isinstance(after_entries, list):
             raise InstallError(f"Merge corrupted hooks.{event}")
-        non_map_after = [e for e in after_entries if not is_map_hook_entry(e)]
+        non_map_after = [e for e in after_entries if not is_map_hook_entry(e, gate_path)]
         if non_map_before != non_map_after:
             raise InstallError(
                 f"Merge would modify non-MAP hook entries for event {event!r}; aborting."
@@ -310,12 +363,13 @@ def write_install_manifest(
 
 def merge_hooks_json(cursor_dir: Path, mode: str) -> tuple[Path, Path]:
     hooks_json = cursor_dir / "hooks.json"
-    map_hooks = render_map_hooks(review_gate_path_for(cursor_dir, mode))
+    gate_path = review_gate_path_for(cursor_dir, mode)
+    map_hooks = render_map_hooks(gate_path)
 
     if hooks_json.is_file():
         existing = load_json(hooks_json)
-        merged = merge_hooks(existing, map_hooks)
-        validate_non_map_preserved(existing, merged)
+        merged = merge_hooks(existing, map_hooks, review_gate_path=gate_path)
+        validate_non_map_preserved(existing, merged, review_gate_path=gate_path)
         backup = backup_hooks_json(hooks_json)
         atomic_write_json(hooks_json, merged)
         return backup, hooks_json
@@ -398,27 +452,34 @@ def run_doctor(cursor_dir: Path | None = None, *, security: bool = False) -> int
     hooks_json = cursor / "hooks.json"
     if hooks_json.is_file():
         data = load_json(hooks_json)
+        expected_count = expected_map_hook_count(gate if gate.is_file() else None)
         map_count = sum(
             1
             for entries in data.get("hooks", {}).values()
             if isinstance(entries, list)
             for entry in entries
-            if is_map_hook_entry(entry)
+            if is_map_hook_entry(entry, gate if gate.is_file() else None)
         )
-        if map_count >= 8:
-            ok.append(f"hooks.json: {map_count} MAP entries")
+        if map_count >= expected_count:
+            ok.append(f"hooks.json: {map_count} MAP entries (expected {expected_count})")
         else:
-            issues.append(f"hooks.json: expected >=8 MAP entries, found {map_count}")
+            issues.append(
+                f"hooks.json: expected >={expected_count} MAP entries, found {map_count}"
+            )
         if gate.is_file():
-            mismatched = [
-                e.get("command")
+            map_entries = [
+                (str(e.get("command", "")), str(e.get("matcher", "")))
                 for entries in data.get("hooks", {}).values()
                 if isinstance(entries, list)
                 for e in entries
-                if is_map_hook_entry(e) and str(gate) not in str(e.get("command", ""))
+                if is_map_hook_entry(e, gate)
             ]
+            mismatched = [cmd for cmd, _ in map_entries if str(gate) not in cmd]
+            duplicates = len(map_entries) - len(set(map_entries))
             if mismatched:
                 issues.append(f"hooks.json MAP commands do not reference {gate}")
+            elif duplicates:
+                issues.append(f"hooks.json: {duplicates} duplicate MAP command(s)")
             else:
                 ok.append("hooks.json MAP commands reference expected review_gate path")
     else:

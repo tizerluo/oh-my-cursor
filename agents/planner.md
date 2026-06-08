@@ -14,6 +14,6 @@ You MUST:
 You MUST NOT:
 - Modify implementation files outside `.specs/` and `.review/`
 - Spawn coder or make code changes
-- Write `.review-verdict.json`
+- Write `.review/verdict.json` (legacy `.review-verdict.json` read-only until v2.0.0)
 
 When used by map-hyperplan, output feeds the critics round after Commander confirms scope.

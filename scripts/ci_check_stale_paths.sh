@@ -5,10 +5,11 @@ cd "$(dirname "$0")/.."
 
 SCAN_DIRS="hooks skills docs tests .github"
 SCAN_FILES="README.md install.sh CHANGELOG.md"
+SELF="scripts/ci_check_stale_paths.sh"
 
 FAIL=0
 
-# Text deliverables only; skip __pycache__, binaries, and this script's pattern literals.
+# Text deliverables only; skip __pycache__, binaries, spikes, and this script.
 scan() {
   pattern="$1"
   desc="$2"
@@ -17,11 +18,14 @@ scan() {
     [ -d "$d" ] || continue
     hits="$hits$(find "$d" -type f \
       ! -path '*/__pycache__/*' \
+      ! -path '*/spikes/*' \
       ! -name '*.pyc' \
+      ! -name 'ci_check_stale_paths.sh' \
       -exec grep -lE "$pattern" {} + 2>/dev/null || true)"
   done
   for f in $SCAN_FILES; do
     [ -f "$f" ] || continue
+    [ "$f" = "$SELF" ] && continue
     hits="$hits$(grep -lE "$pattern" "$f" 2>/dev/null || true)"
   done
   if [ -n "$hits" ]; then
@@ -34,6 +38,7 @@ scan() {
 scan 'tizer_mac_studio' 'machine-specific path (tizer_mac_studio)'
 scan '/Users/[^ ]+/\.cursor/hooks' 'hardcoded /Users/.../.cursor/hooks path'
 scan '~/.cursor/hooks/review_gate' 'legacy ~/.cursor/hooks/review_gate in deliverables'
+scan 'Path\.home\(\)[[:space:]]*/[[:space:]]*["'\'']\.cursor["'\''][[:space:]]*/[[:space:]]*["'\'']skills' 'Path.home() skills fallback in deliverables'
 
 if [ "$FAIL" -ne 0 ]; then
   echo "Stale path check failed. Use \$OMC_ROOT or install-rendered paths."

@@ -3,55 +3,71 @@
   "hooks": {
     "beforeShellExecution": [
       {
-        "command": "python3 {{REVIEW_GATE_PATH}} check-merge",
+        "command": "python3 {{REVIEW_GATE_QUOTED_PATH}} check-merge",
         "matcher": "gh\\s+pr\\s+merge|gh\\s+api[^\\n]*\\/merge|(?:curl|wget|http)[^\\n]*api\\.github\\.com[^\\n]*\\/merge|git\\s+push\\b",
-        "failClosed": true
+        "failClosed": true,
+        "omc": true
       }
     ],
     "preToolUse": [
       {
-        "command": "python3 {{REVIEW_GATE_PATH}} check-merge",
-        "matcher": "Shell"
+        "command": "python3 {{REVIEW_GATE_QUOTED_PATH}} check-tool-permission",
+        "matcher": "Shell",
+        "failClosed": true,
+        "omc": true
       },
       {
-        "command": "python3 {{REVIEW_GATE_PATH}} check-task-alignment",
-        "matcher": "Task"
+        "command": "python3 {{REVIEW_GATE_QUOTED_PATH}} check-merge",
+        "matcher": "Shell",
+        "omc": true
       },
       {
-        "command": "python3 {{REVIEW_GATE_PATH}} check-tool-permission",
+        "command": "python3 {{REVIEW_GATE_QUOTED_PATH}} check-task-alignment",
+        "matcher": "Task",
+        "omc": true
+      },
+      {
+        "command": "python3 {{REVIEW_GATE_QUOTED_PATH}} check-tool-permission",
         "matcher": "Write|Delete",
-        "failClosed": true
+        "failClosed": true,
+        "omc": true
       }
     ],
     "subagentStart": [
       {
-        "command": "python3 {{REVIEW_GATE_PATH}} set-role",
-        "matcher": "coder|architect|tester-writer|reviewer-grok|reviewer-codex|reviewer-gemini|explore|generalPurpose"
+        "command": "python3 {{REVIEW_GATE_QUOTED_PATH}} set-role",
+        "matcher": "coder|architect|tester-writer|reviewer-grok|reviewer-codex|reviewer-gemini|explore|generalPurpose|planner",
+        "omc": true
       }
     ],
     "subagentStop": [
       {
-        "command": "REVIEW_GATE_HOOK_MODE=subagentStop python3 {{REVIEW_GATE_PATH}} record-subagent",
-        "matcher": "coder"
+        "command": "REVIEW_GATE_HOOK_MODE=subagentStop python3 {{REVIEW_GATE_QUOTED_PATH}} record-subagent",
+        "matcher": "coder",
+        "omc": true
       },
       {
-        "command": "REVIEW_GATE_HOOK_MODE=subagentStop python3 {{REVIEW_GATE_PATH}} record-subagent",
-        "matcher": "reviewer-grok|reviewer-codex|reviewer-gemini"
+        "command": "REVIEW_GATE_HOOK_MODE=subagentStop python3 {{REVIEW_GATE_QUOTED_PATH}} record-subagent",
+        "matcher": "reviewer-grok|reviewer-codex|reviewer-gemini",
+        "omc": true
       },
       {
-        "command": "REVIEW_GATE_HOOK_MODE=subagentStop python3 {{REVIEW_GATE_PATH}} record-subagent",
-        "matcher": "architect|explore|generalPurpose"
+        "command": "REVIEW_GATE_HOOK_MODE=subagentStop python3 {{REVIEW_GATE_QUOTED_PATH}} record-subagent",
+        "matcher": "architect|explore|generalPurpose|tester-writer|planner",
+        "omc": true
       }
     ],
     "stop": [
       {
-        "command": "python3 {{REVIEW_GATE_PATH}} stop-check",
-        "loop_limit": 5
+        "command": "python3 {{REVIEW_GATE_QUOTED_PATH}} stop-check",
+        "loop_limit": 5,
+        "omc": true
       }
     ],
     "sessionStart": [
       {
-        "command": "python3 {{REVIEW_GATE_PATH}} session-resume"
+        "command": "python3 {{REVIEW_GATE_QUOTED_PATH}} session-resume",
+        "omc": true
       }
     ]
   }
