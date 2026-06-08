@@ -84,11 +84,11 @@ These rules are mandatory for every use of this skill:
 - MUST have at least 1 non-Commander model review before merge, for every tier.
 - MUST use all three reviewer subagents for Standard and Large work. No scope-narrowing escape hatch.
 - MUST launch `Task(subagent_type="coder")` for implementation in every tier. Commander MUST NOT edit implementation files directly.
-- MUST write `.review-verdict.json` after review synthesis and before any merge command.
-- MUST ensure `.review-session/<branch>/<HEAD>/` contains hook-recorded subagent marker files for the current branch and HEAD.
+- MUST write **`.review/verdict.json`** after review synthesis and before any merge command (legacy `.review-verdict.json` read until v2.0.0).
+- MUST ensure **`.review/session/<branch>/<HEAD>/`** contains hook-recorded subagent marker files (legacy `.review-session/` read until v2.0.0).
 - MUST document review model(s), verdict, and remaining P2s in the PR body, commit message, or handoff.
 - NEVER merge with only Commander's own verification, even for a 1-line fix.
-- NEVER hand-write `.review-session/` markers or `.review-session.json`. Hooks record subagent completions automatically.
+- NEVER hand-write session markers or session summary JSON. Hooks record subagent completions automatically (canonical write: `.review/session/`, `.review/session-summary.json`).
 - NEVER classify daemon scheduling, push/auth, trusted login, CI/merge automation, or security-sensitive work as Hotfix.
 - NEVER classify a production/daemon runtime crash as Hotfix if the fix involves cross-module assumptions.
 - NEVER declare a tier lower than the hook-inferred minimum from the git diff.
@@ -108,22 +108,24 @@ User-level hooks enforce:
 - `preToolUse` Write/Delete permission gate: fail-closed role matrix (V1.3)
 - `preToolUse` Shell write-pattern gate: blocks redirects/heredoc/cp/mv for read-only MAP roles (V1.3 depth defense)
 - `subagentStart` set-role: writes `.review/roles/{subagent_id}.json`
-- `subagentStop` session recorder: HMAC-sealed markers under `.review-session/`
+- `subagentStop` session recorder: HMAC-sealed markers under **`.review/session/`** (canonical write; legacy `.review-session/` read fallback)
 - `stop` fix-loop driver: reads fix-queue when phase allows (WORKFLOW_STOP_PHASES)
 - `sessionStart` resume + routing hints: injects additional_context (recommendation only)
 
 The merge gate is intentionally fail-closed. It validates all of the following:
 
-- `.review-session/<branch>/<HEAD>/` contains marker files for required subagents
+- `.review/session/<branch>/<HEAD>/` (or legacy `.review-session/`) contains marker files for required subagents
 - Marker files are hook-sealed; hand-written marker JSON is rejected
-- `.review-verdict.json` exists and matches current branch + HEAD
+- `.review/verdict.json` (or legacy `.review-verdict.json`) exists and matches current branch + HEAD
 - Required reviewer subagents were actually recorded for the tier
 - Every tier has a recorded `coder` subagent completion
 - Declared tier is not lower than the hook-inferred tier from git diff/file risk
 - Verdict reviewer claims match recorded reviewer marker types/models
 - Verdict reports `p0: 0` and `p1: 0`
 
-`.review-session/` markers are written by hooks when subagents finish. `.review-session.json` is a human-readable derived summary only; the merge gate validates marker files, not the summary. Commander MUST NOT forge either.
+Markers are written by hooks when subagents finish (canonical: `.review/session/`). `.review/session-summary.json` is a human-readable derived summary only; the merge gate validates marker files, not the summary. Commander MUST NOT forge either.
+
+Migrate legacy paths: `python3 scripts/migrate_map_state.py <repo> --apply` (see oh-my-cursor [state-migration.md](https://github.com/tizerluo/oh-my-cursor/blob/main/docs/state-migration.md)).
 
 ### Tool permission depth defense (V1.3)
 
@@ -141,7 +143,7 @@ Shell gate blocks redirect/heredoc/`cp`/`mv`/`touch`/`mkdir`/`sed -i` for the sa
 PoC role may redirect only into `.review/poc/`.
 Read-only shell (`git diff`, `pytest`, `rtk grep`) is allowed.
 
-`.review-verdict.json` is written by Commander after synthesis. Use this format:
+**`.review/verdict.json`** is written by Commander after synthesis (legacy read path supported until v2.0.0). Use this format:
 
 ```json
 {
