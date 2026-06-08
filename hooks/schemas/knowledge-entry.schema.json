@@ -1,0 +1,31 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "KnowledgeEntry",
+  "description": "Soft validation guidance for learnings.md / decisions.md",
+  "type": "object",
+  "properties": {
+    "learnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "sources": { "type": "array", "minItems": 1 },
+          "confidence": { "type": "string" },
+          "text": { "type": "string" }
+        }
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["decision", "rationale", "date"],
+        "properties": {
+          "decision": { "type": "string" },
+          "rationale": { "type": "string" },
+          "date": { "type": "string" }
+        }
+      }
+    }
+  }
+}

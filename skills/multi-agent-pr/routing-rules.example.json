@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "rules": [
+    {
+      "id": "hyperplan-spec",
+      "signals": ["写个 spec", "设计方案", "评审设计", "plan", "spec review", "debate"],
+      "workflow": "map-hyperplan",
+      "priority": 10
+    },
+    {
+      "id": "security-audit",
+      "signals": ["安全审计", "查漏洞", "security audit", "vulnerability", "pen test"],
+      "workflow": "map-security",
+      "priority": 10
+    },
+    {
+      "id": "refactor",
+      "signals": ["重构", "拆分", "迁移", "refactor", "extract", "rename module"],
+      "workflow": "map-refactor",
+      "priority": 10
+    },
+    {
+      "id": "development-default",
+      "signals": ["开发", "实现", "fix", "feature", "bug", "implement"],
+      "workflow": "multi-agent-pr",
+      "priority": 5
+    }
+  ],
+  "conflict_resolution": "highest priority wins; ties show all options in AskQuestion"
+}

@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DebateRound",
+  "type": "object",
+  "required": [
+    "session_id",
+    "round",
+    "claims",
+    "counterclaims",
+    "evidence",
+    "unresolved",
+    "consensus_items"
+  ],
+  "properties": {
+    "session_id": { "type": "string" },
+    "round": { "type": "integer", "minimum": 1 },
+    "claims": { "type": "array" },
+    "counterclaims": { "type": "array" },
+    "evidence": { "type": "array" },
+    "unresolved": { "type": "array" },
+    "consensus_items": { "type": "array" }
+  }
+}

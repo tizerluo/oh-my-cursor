@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.Python
+
+# MAP secrets and logs
+hooks/.review-gate-secret
+hooks/spikes/*.log
+*.bak
+
+# OS
+.DS_Store
+
+# Review state (consumer repos; keep hyperplan artifacts for now)
+# .review/
