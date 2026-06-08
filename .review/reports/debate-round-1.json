@@ -1,0 +1,43 @@
+{
+  "session_id": "hyperplan-oh-my-cursor-2026-06-08",
+  "round": 1,
+  "claims": [
+    {"id": "c-arch-1", "text": "Package root, install target, and mutable secret location must be separate variables (OMC_ROOT vs OMC_SECRET_FILE).", "author": "critic-architecture"},
+    {"id": "c-arch-2", "text": "DEF-09 helpers must split read-path resolution from canonical write-path — no overloaded _session_head_dir().", "author": "critic-architecture"},
+    {"id": "c-arch-3", "text": "Secret continuity across extract is P0: existing ~/.cursor/hooks/.review-gate-secret must migrate or dual-read for marker validation.", "author": "critic-architecture"},
+    {"id": "c-sec-1", "text": "_secret() ephemeral fallback on OSError must be forbidden — fail closed instead.", "author": "critic-security"},
+    {"id": "c-sec-2", "text": "Install merge requires MAP hook allowlist + integrity check; symlink install needs explicit risk acknowledgment.", "author": "critic-security"},
+    {"id": "c-sec-3", "text": "migrate_map_state.py default must be copy-only; move requires --destructive.", "author": "critic-security"},
+    {"id": "c-cost-1", "text": "Full v1.0 scope (DEF-09 + 3 install modes) is 5–7 days, not 3–4.", "author": "critic-cost"},
+    {"id": "c-cost-2", "text": "Dual-read needs dated sunset (v2.0.0) or maintenance cost is indefinite.", "author": "critic-cost"},
+    {"id": "c-cost-3", "text": "CI must run all test modules (~42); run_tests.sh currently runs only spikes/test_review_gate.py.", "author": "critic-cost"}
+  ],
+  "counterclaims": [
+    {"id": "cc-1", "text": "DEF-09 can stay deferred per MAP_DEFERRED_STATUS.md.", "author": "commander", "refutes": "c-cost-1", "reason": "User confirmed v1.0 includes DEF-09; deferral rejected but estimate and contracts must expand."}
+  ],
+  "evidence": [
+    {"claim_id": "c-arch-3", "ref": "review_gate.py:30"},
+    {"claim_id": "c-arch-3", "ref": "review_gate.py:238-249"},
+    {"claim_id": "c-sec-1", "ref": "review_gate.py:228-229"},
+    {"claim_id": "c-cost-3", "ref": "hooks/run_tests.sh:4"},
+    {"claim_id": "c-arch-2", "ref": "review_gate.py:491-508"}
+  ],
+  "unresolved": [
+    {"severity": "P0", "desc": "Secret continuity + fail-closed _secret() not yet in spec", "id": "sec-p0-bundle"},
+    {"severity": "P0", "desc": "Install merge allowlist/fingerprint undefined", "id": "sec-p0-4"},
+    {"severity": "P0", "desc": "Read/write path helper split not specified", "id": "arch-p0-def09"},
+    {"severity": "P1", "desc": "Estimate still 3–4d in spec vs critic 5–7d", "id": "cost-p1-estimate"},
+    {"severity": "P1", "desc": "Dual-read sunset date missing", "id": "cost-p0-5"},
+    {"severity": "P1", "desc": "Test count and CI scope understated", "id": "cost-p0-2"}
+  ],
+  "consensus_items": [
+    "Extract MAP from unversioned ~/.cursor/ is architecturally justified",
+    "DEF-09 dual-read with canonical write is the right migration direction",
+    "Non-destructive hooks.json merge + backup is correct default",
+    "Dry-run default for migration script",
+    "map-hyperplan merge permanently blocked",
+    "HMAC marker sealing is correct primitive when secret is stable",
+    "--copy as production default; --link for maintainer dev",
+    "gitnexus-* and issue-to-pr business code out of scope"
+  ]
+}

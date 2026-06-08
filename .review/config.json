@@ -1,0 +1,15 @@
+{
+  "active": true,
+  "workflow": "map-hyperplan",
+  "max_critics": 3,
+  "max_rounds": 2,
+  "spec": "oh-my-cursor",
+  "session_id": "hyperplan-oh-my-cursor-2026-06-08",
+  "phase": "accepted",
+  "round": 2,
+  "progress": {
+    "completed": {
+      "critics": ["critic-architecture", "critic-security", "critic-cost"]
+    }
+  }
+}
