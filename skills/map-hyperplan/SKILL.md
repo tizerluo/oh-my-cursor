@@ -10,6 +10,28 @@ description: >-
 
 Commander-driven spec quality workflow. Output: `.specs/{name}.md` + `.review/reports/`.
 
+## When to use (position in MAP lifecycle)
+
+**Hyperplan runs after Plan mode — not instead of it.**
+
+```
+Plan mode → original plan (.cursor/plans/*.plan.md)
+         → map-hyperplan (adversarial review)
+         → merge accepted spec back into original plan  ← mandatory Commander step
+         → implement per merged plan (multi-agent-pr / coder)
+```
+
+See [docs/workflows/plan-then-hyperplan.md](../../docs/workflows/plan-then-hyperplan.md) for full workflow, document hierarchy, and anti-patterns.
+
+| Phase | Mode | Primary artifact |
+|-------|------|------------------|
+| 1. Draft plan | Cursor **Plan mode** | `.cursor/plans/{name}.plan.md` |
+| 2. Adversarial review | **map-hyperplan** | `.specs/{name}.md`, `.review/reports/` |
+| 3. Merge back | Commander | **Update original plan** (single source of truth) |
+| 4. Build | extract plan phases | code, install, CI |
+
+**Do not** stop at `status: accepted` on the spec alone — fuse critic revisions (P0 contracts, estimates, DoD) into the plan before implementation.
+
 ## Workflow ID
 
 `map-hyperplan`
@@ -27,7 +49,7 @@ Default: 3 critics. Extend via `config.max_critics` (max 5).
 ## Pipeline
 
 ```
-config-confirmed → draft → critics → debate → revise → accepted
+config-confirmed → draft → critics → debate → revise → accepted → merge-back-to-plan
 ```
 
 1. **Draft** — Commander or Planner agent (V2.0 optional) writes spec to `.specs/`
@@ -51,6 +73,8 @@ config-confirmed → draft → critics → debate → revise → accepted
 Schema: `~/.cursor/hooks/schemas/debate-round.schema.json`
 4. **Revise** — update spec; increment round until `max_rounds` or consensus
 5. **Accepted** — set spec frontmatter `status: accepted`
+6. **Merge back** — fuse accepted spec + debate conclusions into the **original Plan-mode document** (`.cursor/plans/*.plan.md`); update todos, estimates, DoD. Add `implementation_plan` in spec frontmatter pointing to the plan. `.specs/` remains audit archive only.
+   - **Timing:** after hyperplan session ends (hook allows only `.specs/` + `.review/` during active hyperplan; plan merge is a post-exit Commander step)
 
 ## Loop control
 
@@ -78,7 +102,8 @@ Stop hook at `phase=revise` emits critic-queue followup when pending items exist
 ## Exit conditions
 
 - critic-queue empty + all critics signed off → `phase: accepted`
-- max_rounds exhausted → best spec + unresolved list in report
+- **Original plan updated** with hyperplan revisions (Commander checklist in plan-then-hyperplan.md)
+- max_rounds exhausted → best spec + unresolved list in report; still merge what was resolved into plan
 - **No merge gate** — merge/push is **permanently blocked** for map-hyperplan (hook-enforced)
 - **Forbidden:** coder subagent marker (gate fail-closed if detected)
 - Allowed writes: `.specs/`, `.review/` only
