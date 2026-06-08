@@ -29,9 +29,10 @@ class MergeHooksTests(unittest.TestCase):
                 ]
             },
         }
-        map_hooks = omc_install.render_map_hooks(Path("/new/review_gate.py"))
-        merged = omc_install.merge_hooks(existing, map_hooks)
-        omc_install.validate_non_map_preserved(existing, merged)
+        gate = Path("/new/review_gate.py")
+        map_hooks = omc_install.render_map_hooks(gate)
+        merged = omc_install.merge_hooks(existing, map_hooks, review_gate_path=gate)
+        omc_install.validate_non_map_preserved(existing, merged, review_gate_path=gate)
         pre = merged["hooks"]["preToolUse"]
         self.assertEqual(pre[0]["command"], "rtk hook cursor")
         self.assertTrue(all("review_gate.py" in e["command"] for e in pre[1:]))
@@ -40,9 +41,34 @@ class MergeHooksTests(unittest.TestCase):
         gate = Path("/opt/omc/hooks/review_gate.py")
         map_hooks = omc_install.render_map_hooks(gate)
         existing = {"version": 1, "hooks": {}}
-        first = omc_install.merge_hooks(existing, map_hooks)
-        second = omc_install.merge_hooks(first, map_hooks)
+        first = omc_install.merge_hooks(existing, map_hooks, review_gate_path=gate)
+        second = omc_install.merge_hooks(first, map_hooks, review_gate_path=gate)
         self.assertEqual(first, second)
+
+    def test_substring_hook_not_treated_as_map(self):
+        gate = Path("/new/review_gate.py")
+        existing = {
+            "hooks": {
+                "preToolUse": [
+                    {"command": "test -f /path/review_gate.py && echo ok", "matcher": "Shell"}
+                ]
+            }
+        }
+        map_hooks = omc_install.render_map_hooks(gate)
+        merged = omc_install.merge_hooks(existing, map_hooks, review_gate_path=gate)
+        pre = merged["hooks"]["preToolUse"]
+        self.assertEqual(pre[0]["command"], "test -f /path/review_gate.py && echo ok")
+
+    def test_rendered_commands_are_quoted(self):
+        gate = Path("/opt/with space/review_gate.py")
+        rendered = omc_install.render_map_hooks(gate)
+        shell_cmds = [
+            e["command"]
+            for e in rendered["hooks"]["preToolUse"]
+            if e.get("matcher") == "Shell"
+        ]
+        self.assertTrue(any("with space" in cmd for cmd in shell_cmds))
+        self.assertTrue(all("python3 " in cmd for cmd in shell_cmds))
 
     def test_refuses_non_map_modification(self):
         before = {

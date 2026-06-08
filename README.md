@@ -6,7 +6,7 @@ Independent, versioned **MAP (Multi-Agent PR)** engine for Cursor.
 
 ## Status
 
-- **Version:** 1.0.0 (see [CHANGELOG.md](CHANGELOG.md))
+- **Version:** 1.0.1 (see [CHANGELOG.md](CHANGELOG.md))
 - **Spec:** [`.specs/oh-my-cursor.md`](.specs/oh-my-cursor.md) (accepted via map-hyperplan)
 - **Phases 1–5:** Extract complete — global cutover + v1.0.0 tag
 - **Live Spike:** Cursor 3.7.19+ — [docs/spike-verification.md](docs/spike-verification.md)

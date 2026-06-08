@@ -33,5 +33,12 @@ jobs:
           python3 scripts/install.py --copy --target "$HOME/.cursor"
           python3 scripts/install.py --doctor --security --target "$HOME/.cursor"
 
+      - name: Install smoke (project copy)
+        run: |
+          PROJECT="${{ runner.temp }}/omc_ci_project"
+          mkdir -p "$PROJECT"
+          python3 scripts/install.py --copy --project "$PROJECT"
+          python3 scripts/install.py --doctor --security --target "$PROJECT/.cursor"
+
       - name: Stale path check
         run: ./scripts/ci_check_stale_paths.sh

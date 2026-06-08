@@ -93,11 +93,11 @@ class SecretTrustTests(unittest.TestCase):
             secret = Path(tmp) / "missing" / "secret"
             os.environ["OMC_SECRET_FILE"] = str(secret)
             with patch.object(rg, "migrate_legacy_secret_if_needed", return_value=False):
-                with patch.object(rg, "_create_secret_file", side_effect=rg.SecretError("denied")):
-                    with patch.object(sys, "exit", side_effect=SystemExit(2)):
-                        with self.assertRaises(SystemExit) as ctx:
-                            rg._secret()
-                        self.assertEqual(ctx.exception.code, 2)
+                with patch.object(sys, "exit", side_effect=SystemExit(2)):
+                    with self.assertRaises(SystemExit) as ctx:
+                        rg._secret()
+                    self.assertEqual(ctx.exception.code, 2)
+            self.assertFalse(secret.is_file())
 
 
 if __name__ == "__main__":
