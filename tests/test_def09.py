@@ -12,16 +12,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-HOOKS_DIR = Path(__file__).resolve().parents[1] / "hooks"
+from map_test_helpers import SecretBootstrapMixin, load_review_gate
+
 SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 
-
-def load_review_gate():
-    spec = importlib.util.spec_from_file_location("review_gate", HOOKS_DIR / "review_gate.py")
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
 
 
 def load_migrate():
@@ -31,21 +25,6 @@ def load_migrate():
     spec.loader.exec_module(module)
     return module
 
-
-class SecretBootstrapMixin:
-    """Isolate tests from host secret / OMC_SECRET_FILE (R02 fail-closed)."""
-
-    def _bootstrap_secret(self, rg) -> None:
-        self._secret_tmp = tempfile.TemporaryDirectory()
-        secret = Path(self._secret_tmp.name) / "secret"
-        rg.bootstrap_secret(secret)
-        os.environ["OMC_SECRET_FILE"] = str(secret)
-
-    def _clear_secret_env(self) -> None:
-        os.environ.pop("OMC_SECRET_FILE", None)
-        if hasattr(self, "_secret_tmp"):
-            self._secret_tmp.cleanup()
-            del self._secret_tmp
 
 
 def write_marker_file(rg, head_dir: Path, subagent_type: str, branch: str, head_sha: str) -> None:
