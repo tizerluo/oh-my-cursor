@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run unit tests
+        run: ./hooks/run_tests.sh
+
+      - name: Python compile check
+        run: |
+          python3 -m py_compile hooks/review_gate.py
+          python3 -m py_compile scripts/install.py
+          python3 -m py_compile scripts/migrate_map_state.py
+
+      - name: Install smoke (copy + doctor --security)
+        env:
+          HOME: ${{ runner.temp }}/omc_ci_home
+        run: |
+          mkdir -p "$HOME"
+          python3 scripts/install.py --copy --target "$HOME/.cursor"
+          python3 scripts/install.py --doctor --security --target "$HOME/.cursor"
+
+      - name: Stale path check
+        run: ./scripts/ci_check_stale_paths.sh

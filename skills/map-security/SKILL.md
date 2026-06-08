@@ -53,7 +53,7 @@ config-confirmed → scope → hunt → triage → poc → report
 
 ## security-queue.json (optional second hunt)
 
-Unverified High+ findings → `.review/security-queue.json` (schema: `~/.cursor/hooks/schemas/security-queue.schema.json`).
+Unverified High+ findings → `.review/security-queue.json` (schema: `hooks/schemas/security-queue.schema.json` under `$OMC_ROOT`).
 
 Helper appends deduped findings:
 

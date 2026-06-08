@@ -29,9 +29,9 @@ Last updated: 2026-06-08 (DEF backlog implementation pass)
 ## CLI helpers
 
 ```bash
-python3 ~/.cursor/hooks/review_gate.py advance-fix-queue /path/to/repo [id1,id2] --increment-round
-python3 ~/.cursor/hooks/review_gate.py advance-critic-queue /path/to/repo [id1,id2] --increment-round
-~/.cursor/hooks/run_tests.sh
+python3 "$OMC_ROOT/hooks/review_gate.py" advance-fix-queue /path/to/repo [id1,id2] --increment-round
+python3 "$OMC_ROOT/hooks/review_gate.py" advance-critic-queue /path/to/repo [id1,id2] --increment-round
+"$OMC_ROOT/hooks/run_tests.sh"
 ```
 
 ## DEF-09 follow-up (deferred)
