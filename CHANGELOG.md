@@ -24,6 +24,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Verdict write to `.review/verdict.json` (read fallback: `.review-verdict.json`)
 - Skills use `$OMC_ROOT` for CLI examples (set to your oh-my-cursor clone path)
 
+### Released — cutover (2026-06-08)
+
+- Global `~/.cursor` installed via `./install.sh --copy`; `MAP_MOVED_TO.md` at `~/.cursor/`
+- Legacy hook shell wrappers removed; `doctor --security` pass on live install
+- Consumer example: `docs/integrations/issue-to-pr.md` + `--project` install
+- Git tag **v1.0.0**
+
 ### Compatibility
 
 - **Cursor 3.7.19+** verified for subagentStop marker path (Live Spike)
@@ -37,4 +44,4 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Planned
 
-- Phase 5: global `~/.cursor` cutover, v1.0.0 git tag, consumer integration docs
+- v2.0.0: remove legacy `.review-session/` read paths (target 2027-Q1)

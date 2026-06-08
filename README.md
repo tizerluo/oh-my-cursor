@@ -8,7 +8,7 @@ Independent, versioned **MAP (Multi-Agent PR)** engine for Cursor.
 
 - **Version:** 1.0.0 (see [CHANGELOG.md](CHANGELOG.md))
 - **Spec:** [`.specs/oh-my-cursor.md`](.specs/oh-my-cursor.md) (accepted via map-hyperplan)
-- **Phases 1–4:** Core, installer, secret, DEF-09, CI/docs — **81/81 tests pass**
+- **Phases 1–5:** Extract complete — global cutover + v1.0.0 tag
 - **Live Spike:** Cursor 3.7.19+ — [docs/spike-verification.md](docs/spike-verification.md)
 
 ## Quick start (development)
@@ -28,7 +28,7 @@ chmod +x install.sh
 python3 scripts/install.py --doctor
 ```
 
-Details: [docs/install.md](docs/install.md) · [docs/architecture.md](docs/architecture.md) · [docs/state-migration.md](docs/state-migration.md)
+Details: [docs/install.md](docs/install.md) · [docs/architecture.md](docs/architecture.md) · [docs/state-migration.md](docs/state-migration.md) · [docs/integrations/issue-to-pr.md](docs/integrations/issue-to-pr.md)
 
 ## Development
 
