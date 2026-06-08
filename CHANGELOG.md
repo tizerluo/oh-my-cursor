@@ -9,6 +9,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - **#8** Reviewer logical role mapping: `generalPurpose` reviewer spawns infer `reviewer-*` from prompt/model; merge-gate markers use logical role; Task denies invalid `subagent_type=reviewer-*` with spawn template
+- **#4** Hyperplan: `advance_critic_queue` requires non-empty debate `claims` before `accepted`; Configuration Gate in map-hyperplan SKILL; sessionStart hints
 
 ### Planned
 
