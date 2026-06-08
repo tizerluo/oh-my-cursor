@@ -53,7 +53,7 @@
       },
       {
         "command": "REVIEW_GATE_HOOK_MODE=subagentStop python3 {{REVIEW_GATE_QUOTED_PATH}} record-subagent",
-        "matcher": "architect|explore|generalPurpose|tester-writer",
+        "matcher": "architect|explore|generalPurpose|tester-writer|planner",
         "omc": true
       }
     ],
