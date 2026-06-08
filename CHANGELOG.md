@@ -66,6 +66,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **#8** Reviewer logical role mapping: `generalPurpose` reviewer spawns infer `reviewer-*` from prompt/model; merge-gate markers use logical role; Task denies invalid `subagent_type=reviewer-*` with spawn template
+
 ### Planned
 
 - v2.0.0: remove legacy `.review-session/` read paths (target 2027-Q1)

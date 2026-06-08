@@ -28,6 +28,22 @@ Available model slugs for subagent roles (as of 2026-06):
 | `generalPurpose` | Yes | Research, exploration |
 | `explore` | No | Fast codebase search |
 
+## Platform type vs MAP logical role
+
+Cursor Task accepts **platform** subagent types only. MAP **logical roles** (merge-gate marker `type`, permission checks) may differ when reviewers are spawned via `generalPurpose`.
+
+| MAP logical role | Platform `subagent_type` | `readonly` | Typical model |
+|------------------|--------------------------|------------|---------------|
+| `reviewer-grok` | `generalPurpose` | `true` | `grok-build-0.1` |
+| `reviewer-codex` | `generalPurpose` | `true` | `gpt-5.3-codex-high-fast` |
+| `reviewer-gemini` | `generalPurpose` | `true` | `gemini-3.1-pro` |
+| `coder` | `coder` | — | `composer-2.5-fast` |
+| `architect` | `architect` | — | `gpt-5.5-medium` |
+| `tester-writer` | `tester-writer` | — | `kimi-k2.5` |
+| `explore` | `explore` | — | (varies) |
+
+Prompt must include `logical_role: reviewer-<engine>` (or `Reviewer-Grok` / etc.) so hooks infer the logical role at `subagentStart` and record `reviewer-*` markers at `subagentStop`.
+
 ## Prompt Templates
 
 ### Architect Prompt Skeleton

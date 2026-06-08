@@ -1812,6 +1812,60 @@ def session_resume_from_hook(data: dict[str, Any]) -> dict[str, Any]:
     return {"additional_context": "\n".join(parts)}
 
 
+_REVIEWER_MODEL_MAP: dict[str, str] = {
+    "grok-build-0.1": "reviewer-grok",
+    "gpt-5.3-codex-high-fast": "reviewer-codex",
+    "gemini-3.1-pro": "reviewer-gemini",
+}
+
+_REVIEWER_SPAWN_MODELS: dict[str, str] = {
+    "reviewer-grok": "grok-build-0.1",
+    "reviewer-codex": "gpt-5.3-codex-high-fast",
+    "reviewer-gemini": "gemini-3.1-pro",
+}
+
+
+def _infer_reviewer_logical_role(model: str, prompt: str) -> str | None:
+    """Infer MAP reviewer logical_role from generalPurpose spawn prompt and/or model."""
+    text = prompt or ""
+    match = re.search(r"logical_role:\s*reviewer-(\w+)", text, re.I)
+    if match:
+        return f"reviewer-{match.group(1).lower()}"
+    match = re.search(r"Reviewer-(Grok|Codex|Gemini)", text, re.I)
+    if match:
+        return f"reviewer-{match.group(1).lower()}"
+    if model in _REVIEWER_MODEL_MAP:
+        return _REVIEWER_MODEL_MAP[model]
+    return None
+
+
+def _subagent_start_prompt(data: dict[str, Any]) -> str:
+    for key in ("prompt", "user_message"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return _task_prompt(data)
+
+
+def _subagent_start_model(data: dict[str, Any], fallback: str = "") -> str:
+    tool_input = _extract_task_tool_input(data)
+    for key in ("model", "agent_model"):
+        for source in (tool_input, data):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return fallback
+
+
+def _reviewer_spawn_template(logical_role: str) -> str:
+    model = _REVIEWER_SPAWN_MODELS.get(logical_role, "<reviewer-model>")
+    engine = logical_role.removeprefix("reviewer-").capitalize()
+    return (
+        f'Task(subagent_type="generalPurpose", model="{model}", readonly=true, '
+        f'prompt="You are MAP Reviewer-{engine}. logical_role: {logical_role}\\n...")'
+    )
+
+
 def _infer_role_from_transcript(transcript_path: str) -> str:
     lowered = transcript_path.lower()
     for role in (
@@ -1847,6 +1901,15 @@ def set_role_from_hook(data: dict[str, Any]) -> dict[str, Any]:
             break
     if not logical_role and config:
         logical_role = _resolve_logical_role(config, subagent_type)
+
+    if subagent_type == "generalPurpose":
+        spawn_model = _subagent_start_model(data, model)
+        spawn_prompt = _subagent_start_prompt(data)
+        inferred_reviewer = _infer_reviewer_logical_role(spawn_model, spawn_prompt)
+        if inferred_reviewer:
+            logical_role = inferred_reviewer
+            if spawn_model and not model:
+                model = spawn_model
 
     workflow = str(config.get("workflow") or "multi-agent-pr")
     progress = ctx["progress"] or {}
@@ -2004,10 +2067,24 @@ def check_task_alignment_from_hook(data: dict[str, Any]) -> dict[str, Any]:
 
     workflow = str(config.get("workflow") or "multi-agent-pr")
 
+    subagent_type = _task_subagent_type(data)
+    if subagent_type.startswith("reviewer-"):
+        template = _reviewer_spawn_template(subagent_type)
+        return {
+            "permission": "deny",
+            "user_message": (
+                f"Cursor Task does not support subagent_type={subagent_type!r}. "
+                f"Use generalPurpose with readonly=true instead."
+            ),
+            "agent_message": (
+                f"BLOCKED: Task(subagent_type={subagent_type!r}) is invalid. "
+                f"Spawn reviewers via platform type generalPurpose + readonly + prompt seat. "
+                f"Example: {template}"
+            ),
+        }
+
     if _map_exempt_task(data, workflow):
         return {"permission": "allow"}
-
-    subagent_type = _task_subagent_type(data)
     if not subagent_type:
         return {"permission": "allow"}
     if not _is_map_managed_role(subagent_type, workflow):
@@ -2064,7 +2141,7 @@ def record_subagent_from_hook(data: dict[str, Any], raw: str) -> dict[str, Any]:
             )
         }
 
-    subagent_type, model, _ = _extract_subagent_fields(data)
+    subagent_type, model, subagent_id = _extract_subagent_fields(data)
     if not subagent_type:
         return {}
 
@@ -2078,12 +2155,28 @@ def record_subagent_from_hook(data: dict[str, Any], raw: str) -> dict[str, Any]:
     branch = ctx["branch"]
     head_sha = ctx["head_sha"]
 
+    logical_role = subagent_type
+    if subagent_id:
+        role_data = _read_json_file(
+            _review_path(git_root, ROLES_DIR) / f"{_slug(subagent_id)}.json"
+        )
+        if role_data:
+            logical_role = str(
+                role_data.get("logical_role") or role_data.get("role") or subagent_type
+            )
+
+    marker_type = (
+        logical_role
+        if logical_role in ALL_RECORDED_TYPES or logical_role.startswith("reviewer-")
+        else subagent_type
+    )
+
     payload_fingerprint = hashlib.sha256(raw.encode("utf-8")).hexdigest()
     marker = {
         "branch": branch,
         "head_sha": head_sha,
         "tree_sha": ctx["tree_sha"],
-        "type": subagent_type,
+        "type": marker_type,
         "model": model or None,
         "completed_at": _now_iso(),
         "source": "cursor-subagentStop",
@@ -2094,7 +2187,7 @@ def record_subagent_from_hook(data: dict[str, Any], raw: str) -> dict[str, Any]:
     _write_marker(git_root, branch, head_sha, marker)
     _write_session_summary(git_root, branch, head_sha)
 
-    if subagent_type == "coder":
+    if marker_type == "coder":
         return {
             "followup_message": (
                 f"Coder recorded under {REVIEW_DIR}/{CANONICAL_SESSION_SUBDIR}/. "
@@ -2102,11 +2195,11 @@ def record_subagent_from_hook(data: dict[str, Any], raw: str) -> dict[str, Any]:
             )
         }
 
-    if subagent_type in REVIEWER_TYPES:
+    if marker_type in REVIEWER_TYPES:
         completed = sorted(_completed_types(_marker_payloads(git_root, branch, head_sha), REVIEWER_TYPES))
         return {
             "followup_message": (
-                f"Reviewer {subagent_type} recorded. Completed reviewers: {', '.join(completed)}."
+                f"Reviewer {marker_type} recorded. Completed reviewers: {', '.join(completed)}."
             )
         }
 
