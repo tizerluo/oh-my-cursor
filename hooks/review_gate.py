@@ -1016,6 +1016,20 @@ def _strip_shell_redirects(command: str) -> str:
     return _SHELL_REDIRECT_TARGET.sub("", command)
 
 
+_POC_SHELL_REDIRECT_ALLOWED = re.compile(r"^\s*(?:echo|printf)\b", re.I)
+
+
+def _poc_redirect_remainder_allowed(remainder: str) -> bool:
+    """Only echo/printf may precede a PoC sandbox redirect (fail-closed)."""
+    if not remainder.strip():
+        return False
+    if SHELL_WRITE_PATTERN.search(remainder):
+        return False
+    if re.search(r"(?<!<)<(?!<)", remainder):
+        return False
+    return bool(_POC_SHELL_REDIRECT_ALLOWED.match(remainder))
+
+
 def _poc_shell_has_expansion(command: str) -> bool:
     if re.search(r"\$\(", command):
         return True
@@ -1035,7 +1049,7 @@ def _poc_shell_redirect_only(
     if _poc_shell_has_expansion(command):
         return False
     remainder = _strip_shell_redirects(command)
-    if SHELL_WRITE_PATTERN.search(remainder):
+    if not _poc_redirect_remainder_allowed(remainder):
         return False
     return True
 

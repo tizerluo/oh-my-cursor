@@ -430,6 +430,45 @@ class ShellWriteTests(unittest.TestCase):
                 ),
             )
 
+    def test_poc_interpreter_redirect_blocked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".review" / "poc").mkdir(parents=True)
+            self.assertTrue(
+                rg._shell_write_blocked(
+                    'python3 -c "open(\'/tmp/x\',\'w\')" > .review/poc/x',
+                    "poc-exploit",
+                    git_root=root,
+                    config={},
+                ),
+            )
+
+    def test_poc_bash_script_redirect_blocked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".review" / "poc").mkdir(parents=True)
+            self.assertTrue(
+                rg._shell_write_blocked(
+                    "bash .review/poc/exploit.sh > .review/poc/out",
+                    "poc-exploit",
+                    git_root=root,
+                    config={},
+                ),
+            )
+
+    def test_poc_echo_redirect_still_allowed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".review" / "poc").mkdir(parents=True)
+            self.assertFalse(
+                rg._shell_write_blocked(
+                    "echo poc > .review/poc/x",
+                    "poc-exploit",
+                    git_root=root,
+                    config={},
+                ),
+            )
+
 
 class StopCheckTests(unittest.TestCase):
     @patch.object(rg, "_critic_queue_followup")
