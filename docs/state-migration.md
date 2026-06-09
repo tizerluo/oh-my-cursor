@@ -45,6 +45,8 @@ Rollback:
 python3 scripts/migrate_map_state.py /path/to/repo --rollback
 ```
 
+Rollback validates every manifest `action["dest"]` resolves under `manifest["repo"]` before deleting or moving files. Tampered manifests that point outside the repository (e.g. `/tmp/evil`) raise `MigrateError` and perform no rollback.
+
 ## After migration
 
 - New markers and verdicts write to canonical paths only

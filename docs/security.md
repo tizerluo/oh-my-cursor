@@ -8,7 +8,8 @@ MAP uses HMAC-sealed subagent markers. The secret file is the root of trust for 
 |--------|----------|
 | `HOOKS_DIR` | Directory containing `review_gate.py` |
 | `secret_file_path()` | `$OMC_SECRET_FILE` env, else `HOOKS_DIR/.review-gate-secret` |
-| Legacy | `~/.cursor/hooks/.review-gate-secret` — copied once if target missing (global install only; project-only installs should rely on `OMC_SECRET_FILE` / target `hooks/.review-gate-secret`) |
+| `legacy_secret_file_path()` | `$OMC_LEGACY_SECRET_FILE` env, else `~/.cursor/hooks/.review-gate-secret` |
+| Legacy | `legacy_secret_file_path()` — copied once if target missing (global install only; project-only installs should rely on `OMC_SECRET_FILE` / target `hooks/.review-gate-secret`) |
 
 ## Rules (Phase 2b)
 
@@ -35,7 +36,7 @@ Install runs `bootstrap_secret()` at the target secret path and records `secret_
 ## Verification
 
 ```bash
-./hooks/run_tests.sh   # includes tests/test_security.py (6 tests)
+./hooks/run_tests.sh   # includes tests/test_security.py (7 tests)
 ```
 
 See [`.specs/oh-my-cursor.md`](../.specs/oh-my-cursor.md) § Secret trust contract.
