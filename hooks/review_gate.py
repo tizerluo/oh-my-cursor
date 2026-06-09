@@ -219,7 +219,11 @@ SHELL_WRITE_PATTERN = re.compile(
     re.I | re.M,
 )
 _SHELL_OUTPUT_FLAG = re.compile(
-    r"(?:^|\s)--(?:output|junitxml|log-file|result-log)(?:=\S+|\s+\S+)",
+    r"(?:^|\s)(?:"
+    r"--(?:output(?:File)?|junitxml|log-file|result-log|coverprofile|basetemp)(?:=\S+|\s+\S+)"
+    r"|-coverprofile(?:=\S+|\s+\S+)"
+    r"|-o\s+\S+"
+    r")",
     re.I,
 )
 SHELL_READONLY_PREFIXES = (

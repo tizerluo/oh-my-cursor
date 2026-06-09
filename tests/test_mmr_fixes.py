@@ -561,6 +561,18 @@ class ReviewerExploreShellPermissionTests(unittest.TestCase):
         result = self._check("git diff --output=../../x", "reviewer-grok")
         self.assertEqual(result["permission"], "deny")
 
+    def test_go_test_o_output_denied_for_reviewer(self):
+        result = self._check("go test -o /tmp/x ./...", "reviewer-grok")
+        self.assertEqual(result["permission"], "deny")
+
+    def test_jest_output_file_denied_for_reviewer(self):
+        result = self._check("jest --outputFile /tmp/x", "reviewer-grok")
+        self.assertEqual(result["permission"], "deny")
+
+    def test_pytest_without_output_flag_allowed_for_reviewer(self):
+        result = self._check("pytest tests/", "reviewer-grok")
+        self.assertEqual(result["permission"], "allow")
+
     def test_git_diff_cmdsub_denied_for_reviewer(self):
         result = self._check('git diff $(python3 -c "print(1)")', "reviewer-grok")
         self.assertEqual(result["permission"], "deny")
