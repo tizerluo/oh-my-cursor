@@ -1061,6 +1061,15 @@ _SHELL_COMPOUND_SEP = re.compile(
 )
 
 
+def _shell_readonly_safe(command: str) -> bool:
+    return (
+        _shell_looks_readonly(command)
+        and not SHELL_WRITE_PATTERN.search(command)
+        and not _SHELL_COMPOUND_SEP.search(command)
+        and not _poc_shell_has_expansion(command)
+    )
+
+
 def _shell_write_blocked(
     command: str,
     logical_role: str,
@@ -2190,41 +2199,31 @@ def check_tool_permission_from_hook(data: dict[str, Any]) -> dict[str, Any]:
                     "agent_message": "BLOCKED: use .review/poc/ sandbox only.",
                 }
             if not (
-                _shell_looks_readonly(command)
-                or _poc_shell_redirect_only(command, git_root, config)
+                _poc_shell_redirect_only(command, git_root, config)
+                or _shell_readonly_safe(command)
             ):
                 return {
                     "permission": "deny",
                     "user_message": "PoC shell limited to read-only commands or echo/printf redirects into .review/poc/.",
                     "agent_message": "BLOCKED: poc-exploit shell allowlist.",
                 }
-        else:
-            if role.startswith("reviewer-") or role == "explore":
-                if not (
-                    _shell_looks_readonly(command)
-                    and not SHELL_WRITE_PATTERN.search(command)
-                    and not _SHELL_COMPOUND_SEP.search(command)
-                ):
-                    return {
-                        "permission": "deny",
-                        "user_message": "Shell file-write pattern blocked for read-only MAP role.",
-                        "agent_message": "BLOCKED: use allowed Write tool paths instead of shell redirects.",
-                    }
-            elif role in {"planner", "generalPurpose"}:
-                if _shell_write_blocked(
-                    command, role, git_root=git_root, config=config
-                ):
-                    return {
-                        "permission": "deny",
-                        "user_message": "Shell file-write pattern blocked for read-only MAP role.",
-                        "agent_message": "BLOCKED: use allowed Write tool paths instead of shell redirects.",
-                    }
-            if role == "explore" and DANGEROUS_SHELL_PATTERN.search(command):
+        elif role.startswith("reviewer-") or role in {
+            "explore",
+            "planner",
+            "generalPurpose",
+        }:
+            if not _shell_readonly_safe(command):
                 return {
                     "permission": "deny",
-                    "user_message": "Dangerous shell command blocked for security hunter/PoC role.",
-                    "agent_message": "BLOCKED: use .review/poc/ sandbox only.",
+                    "user_message": "Shell file-write pattern blocked for read-only MAP role.",
+                    "agent_message": "BLOCKED: use allowed Write tool paths instead of shell redirects.",
                 }
+        if role == "explore" and DANGEROUS_SHELL_PATTERN.search(command):
+            return {
+                "permission": "deny",
+                "user_message": "Dangerous shell command blocked for security hunter/PoC role.",
+                "agent_message": "BLOCKED: use .review/poc/ sandbox only.",
+            }
 
     if tool_name not in {"Write", "Delete"}:
         return {"permission": "allow"}

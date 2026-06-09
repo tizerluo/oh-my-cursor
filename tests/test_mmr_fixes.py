@@ -495,6 +495,14 @@ class PocExploitShellPermissionTests(unittest.TestCase):
         result = self._check("git diff HEAD~1")
         self.assertEqual(result["permission"], "allow")
 
+    def test_git_diff_redirect_denied(self):
+        result = self._check("git diff > /etc/passwd")
+        self.assertEqual(result["permission"], "deny")
+
+    def test_git_log_allowed(self):
+        result = self._check("git log --oneline -5")
+        self.assertEqual(result["permission"], "allow")
+
     def test_echo_redirect_to_poc_allowed(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -544,6 +552,30 @@ class ReviewerExploreShellPermissionTests(unittest.TestCase):
         result = self._check("git diff > /tmp/x", "reviewer-grok")
         self.assertEqual(result["permission"], "deny")
         self.assertIn("redirect", result.get("agent_message", "").lower())
+
+    def test_git_diff_cmdsub_denied_for_reviewer(self):
+        result = self._check('git diff $(python3 -c "print(1)")', "reviewer-grok")
+        self.assertEqual(result["permission"], "deny")
+
+
+class PlannerShellPermissionTests(unittest.TestCase):
+    def _check(self, command: str):
+        ctx = {
+            "git_root": Path("/repo"),
+            "config": {"active": True, "workflow": "map-hyperplan"},
+        }
+        data = {"tool_name": "Shell", "tool_input": {"command": command}}
+        with patch.object(rg, "load_map_context", return_value=ctx):
+            with patch.object(rg, "_role_for_permission", return_value=("planner", {})):
+                return rg.check_tool_permission_from_hook(data)
+
+    def test_rm_rf_denied(self):
+        result = self._check("rm -rf /tmp/x")
+        self.assertEqual(result["permission"], "deny")
+
+    def test_git_diff_allowed(self):
+        result = self._check("git diff HEAD~1")
+        self.assertEqual(result["permission"], "allow")
 
 
 class StopCheckTests(unittest.TestCase):
