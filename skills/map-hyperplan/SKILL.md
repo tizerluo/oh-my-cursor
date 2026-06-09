@@ -21,7 +21,7 @@ Plan mode → original plan (.cursor/plans/*.plan.md)
          → implement per merged plan (multi-agent-pr / coder)
 ```
 
-See [docs/workflows/plan-then-hyperplan.md](../../docs/workflows/plan-then-hyperplan.md) for full workflow, document hierarchy, and anti-patterns.
+See [docs/workflows/plan-then-hyperplan.md](../../docs/workflows/plan-then-hyperplan.md) for full workflow, **merge-back checklist** (fuse P0/P1 into plan), document hierarchy, Configuration Gate, debate **claims required** for `accepted`, and anti-patterns.
 
 | Phase | Mode | Primary artifact |
 |-------|------|------------------|
@@ -45,6 +45,16 @@ See [docs/workflows/plan-then-hyperplan.md](../../docs/workflows/plan-then-hyper
 | critic-cost | `generalPurpose` | cost, maintenance |
 
 Default: 3 critics. Extend via `config.max_critics` (max 5).
+
+## Configuration Gate (Commander) — MANDATORY
+
+Same contract as [multi-agent-pr Step 0.5](../multi-agent-pr/SKILL.md): **AskQuestion before any subagent.**
+
+1. Confirm `workflow: map-hyperplan`, critics count, debate rounds
+2. Write `.review/config.json` (`active: true`) and `.review/progress.json` (`phase: config-confirmed`)
+3. Only then spawn critic Task subagents
+
+`sessionStart` hints if hyperplan trigger words appear without an active `config-confirmed` session. Skipping this gate is an anti-pattern (see workflow doc §反模式 4).
 
 ## Pipeline
 
@@ -99,9 +109,11 @@ python3 "$OMC_ROOT/hooks/review_gate.py" advance-critic-queue /path/to/repo secu
 
 Stop hook at `phase=revise` emits critic-queue followup when pending items exist.
 
+**Accepted guard (hook-enforced):** when critic-queue is empty, `advance-critic-queue` requires the latest `.review/reports/debate-round-*.json` with **non-empty `claims`** before setting `phase: accepted`. Empty or missing debate reports return `ok: false`.
+
 ## Exit conditions
 
-- critic-queue empty + all critics signed off → `phase: accepted`
+- critic-queue empty + debate report with non-empty `claims` + critics signed off → `phase: accepted`
 - **Original plan updated** with hyperplan revisions (Commander checklist in plan-then-hyperplan.md)
 - max_rounds exhausted → best spec + unresolved list in report; still merge what was resolved into plan
 - **No merge gate** — merge/push is **permanently blocked** for map-hyperplan (hook-enforced)
