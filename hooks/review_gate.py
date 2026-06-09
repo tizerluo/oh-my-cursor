@@ -2089,6 +2089,13 @@ def check_tool_permission_from_hook(data: dict[str, Any]) -> dict[str, Any]:
             "agent_message": "BLOCKED: explore cannot Write/Delete.",
         }
 
+    if role == "":
+        return {
+            "permission": "deny",
+            "user_message": "Write/Delete blocked: no MAP role assigned.",
+            "agent_message": "BLOCKED: active MAP session requires subagentStart role assignment.",
+        }
+
     if role == "generalPurpose" and workflow == "map-hyperplan":
         if not _path_allowed(norm_path, [".review/reports/", ".review/"], git_root):
             return {
