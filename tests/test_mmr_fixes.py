@@ -470,6 +470,43 @@ class ShellWriteTests(unittest.TestCase):
             )
 
 
+class PocExploitShellPermissionTests(unittest.TestCase):
+    def _check(self, command: str, *, git_root: Path | None = None, config: dict | None = None):
+        root = git_root or Path("/repo")
+        cfg = config or {"active": True, "workflow": "map-security"}
+        ctx = {"git_root": root, "config": cfg}
+        data = {"tool_name": "Shell", "tool_input": {"command": command}}
+        with patch.object(rg, "load_map_context", return_value=ctx):
+            with patch.object(
+                rg, "_role_for_permission", return_value=("poc-exploit", {})
+            ):
+                return rg.check_tool_permission_from_hook(data)
+
+    def test_python3_c_without_redirect_denied(self):
+        result = self._check('python3 -c "open(\'/tmp/x\',\'w\').write(\'poc\')"')
+        self.assertEqual(result["permission"], "deny")
+        self.assertIn("allowlist", result.get("agent_message", "").lower())
+
+    def test_bash_poc_script_denied(self):
+        result = self._check("bash .review/poc/exploit.sh")
+        self.assertEqual(result["permission"], "deny")
+
+    def test_git_diff_allowed(self):
+        result = self._check("git diff HEAD~1")
+        self.assertEqual(result["permission"], "allow")
+
+    def test_echo_redirect_to_poc_allowed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".review" / "poc").mkdir(parents=True)
+            result = self._check(
+                "echo poc > .review/poc/x",
+                git_root=root,
+                config={"active": True, "workflow": "map-security"},
+            )
+        self.assertEqual(result["permission"], "allow")
+
+
 class StopCheckTests(unittest.TestCase):
     @patch.object(rg, "_critic_queue_followup")
     @patch.object(rg, "_fix_queue_followup")
