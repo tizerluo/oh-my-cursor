@@ -114,6 +114,16 @@ Stop hook at `phase=revise` emits critic-queue followup when pending items exist
 
 **Path B (fallback):** Commander writes `progress.completed.critics[]` — **convenience-only**, not merge gate evidence.
 
+## Configuration Gate (MANDATORY)
+
+Before spawning any critic subagent:
+
+1. Commander **MUST** call `AskQuestion` (workflow, models, max_rounds).
+2. Write `.review/config.json` with `workflow: map-hyperplan`, `active: true`, `phase: config-confirmed`.
+3. Do **not** simulate critics in plan markdown — spawn parallel `Task` calls per pipeline step 2.
+
+Hook enforcement: `advance_critic_queue` requires latest `debate-round-*.json` with non-empty `claims` before `phase: accepted`. `sessionStart` hints when hyperplan intent detected without active session.
+
 ## Cost defaults
 
 `max_critics: 3`, `max_rounds: 2` (~6-9 subagent calls).
