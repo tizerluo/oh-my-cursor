@@ -2200,7 +2200,11 @@ def check_tool_permission_from_hook(data: dict[str, Any]) -> dict[str, Any]:
                 }
         else:
             if role.startswith("reviewer-") or role == "explore":
-                if not _shell_looks_readonly(command):
+                if not (
+                    _shell_looks_readonly(command)
+                    and not SHELL_WRITE_PATTERN.search(command)
+                    and not _SHELL_COMPOUND_SEP.search(command)
+                ):
                     return {
                         "permission": "deny",
                         "user_message": "Shell file-write pattern blocked for read-only MAP role.",

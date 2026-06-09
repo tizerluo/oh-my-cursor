@@ -536,6 +536,15 @@ class ReviewerExploreShellPermissionTests(unittest.TestCase):
         result = self._check("git diff HEAD~1", "explore")
         self.assertEqual(result["permission"], "allow")
 
+    def test_git_diff_allowed_for_reviewer(self):
+        result = self._check("git diff HEAD~1", "reviewer-grok")
+        self.assertEqual(result["permission"], "allow")
+
+    def test_git_diff_redirect_denied_for_reviewer(self):
+        result = self._check("git diff > /tmp/x", "reviewer-grok")
+        self.assertEqual(result["permission"], "deny")
+        self.assertIn("redirect", result.get("agent_message", "").lower())
+
 
 class StopCheckTests(unittest.TestCase):
     @patch.object(rg, "_critic_queue_followup")
