@@ -65,6 +65,92 @@ class AdvanceCriticQueueTests(unittest.TestCase):
             self.assertTrue(result["ok"])
             self.assertEqual(result["phase"], "accepted")
 
+    def test_deactivates_config_when_queue_emptied(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".review").mkdir()
+            (root / ".review/critic-queue.json").write_text(
+                json.dumps(
+                    {
+                        "session_id": "s1",
+                        "pending_items": [{"id": "sec", "desc": "d"}],
+                    }
+                )
+            )
+            (root / ".review/config.json").write_text(
+                json.dumps(
+                    {
+                        "active": True,
+                        "session_id": "s1",
+                        "workflow": "map-hyperplan",
+                    }
+                )
+            )
+            (root / ".review/progress.json").write_text(json.dumps({"phase": "debate"}))
+            result = rg.advance_critic_queue(root, mark_resolved_ids=["sec"])
+            self.assertTrue(result.get("deactivated"))
+            config = json.loads((root / ".review/config.json").read_text())
+            self.assertFalse(config["active"])
+            self.assertIn("deactivated_at", config)
+
+    def test_session_mismatch_skips_deactivation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".review").mkdir()
+            (root / ".review/critic-queue.json").write_text(
+                json.dumps(
+                    {
+                        "session_id": "other",
+                        "pending_items": [{"id": "sec", "desc": "d"}],
+                    }
+                )
+            )
+            (root / ".review/config.json").write_text(
+                json.dumps(
+                    {
+                        "active": True,
+                        "session_id": "s1",
+                        "workflow": "map-hyperplan",
+                    }
+                )
+            )
+            (root / ".review/progress.json").write_text(json.dumps({"phase": "debate"}))
+            result = rg.advance_critic_queue(root, mark_resolved_ids=["sec"])
+            self.assertEqual(result.get("deactivate_skipped"), "session_mismatch")
+            config = json.loads((root / ".review/config.json").read_text())
+            self.assertTrue(config["active"])
+
+    def test_non_empty_queue_preserves_active(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".review").mkdir()
+            (root / ".review/critic-queue.json").write_text(
+                json.dumps(
+                    {
+                        "session_id": "s1",
+                        "pending_items": [
+                            {"id": "sec", "desc": "d"},
+                            {"id": "perf", "desc": "p"},
+                        ],
+                    }
+                )
+            )
+            (root / ".review/config.json").write_text(
+                json.dumps(
+                    {
+                        "active": True,
+                        "session_id": "s1",
+                        "workflow": "map-hyperplan",
+                    }
+                )
+            )
+            (root / ".review/progress.json").write_text(json.dumps({"phase": "debate"}))
+            result = rg.advance_critic_queue(root, mark_resolved_ids=["sec"])
+            self.assertEqual(result["phase"], "revise")
+            self.assertNotIn("deactivated", result)
+            config = json.loads((root / ".review/config.json").read_text())
+            self.assertTrue(config["active"])
+
 
 class SpecFrontmatterTests(unittest.TestCase):
     def test_parse_frontmatter(self):

@@ -37,6 +37,13 @@ ROUTING_RULES_FILE = "routing-rules.json"
 HOOKS_DIR = Path(__file__).resolve().parent
 LEGACY_SECRET_FILE = Path.home() / ".cursor" / "hooks" / ".review-gate-secret"
 SPECS_DIR = ".specs"
+
+
+def legacy_secret_file_path() -> Path:
+    env = os.environ.get("OMC_LEGACY_SECRET_FILE")
+    if env:
+        return Path(env).expanduser().resolve()
+    return LEGACY_SECRET_FILE
 POC_DIR = ".review/poc"
 
 
@@ -92,20 +99,20 @@ def _read_secret_bytes(path: Path) -> bytes:
 def migrate_legacy_secret_if_needed(target: Path | None = None) -> bool:
     """Copy legacy secret to target if needed. Returns True if copied."""
     dest = (target or secret_file_path()).resolve()
-    legacy = LEGACY_SECRET_FILE.resolve()
+    legacy = legacy_secret_file_path().resolve()
     if dest == legacy:
         return False
     if dest.exists():
         return False
-    if not LEGACY_SECRET_FILE.is_file() or LEGACY_SECRET_FILE.is_symlink():
+    if not legacy.is_file() or legacy.is_symlink():
         return False
-    _validate_secret_stat(LEGACY_SECRET_FILE)
+    _validate_secret_stat(legacy)
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
         os.chmod(dest.parent, 0o700)
     except OSError:
         pass
-    data = _read_secret_bytes(LEGACY_SECRET_FILE)
+    data = _read_secret_bytes(legacy)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     try:
         fd = os.open(dest, flags, 0o600)
@@ -123,7 +130,8 @@ def migrate_legacy_secret_if_needed(target: Path | None = None) -> bool:
 
 
 def _create_secret_file(path: Path) -> bytes:
-    if LEGACY_SECRET_FILE.is_file() and not LEGACY_SECRET_FILE.is_symlink():
+    legacy = legacy_secret_file_path()
+    if legacy.is_file() and not legacy.is_symlink():
         migrate_legacy_secret_if_needed(path)
         if path.is_file():
             return _read_secret_bytes(path)
@@ -1263,11 +1271,11 @@ def check_merge_from_hook(data: dict[str, Any]) -> dict[str, Any]:
 
     config = ctx.get("config") or {}
     workflow = str(config.get("workflow") or "multi-agent-pr")
-    if workflow == "map-hyperplan":
+    if workflow == "map-hyperplan" and config.get("active"):
         return {
             "permission": "deny",
-            "user_message": "map-hyperplan is planning-only; merge/push is permanently blocked.",
-            "agent_message": "BLOCKED: map-hyperplan never passes merge gate.",
+            "user_message": "map-hyperplan session active; planning-only.",
+            "agent_message": "BLOCKED: hyperplan session active; planning-only.",
         }
 
     ok, user_message, agent_message = validate_review_state(git_root, branch, head_sha)
@@ -1405,7 +1413,28 @@ def advance_critic_queue(
     progress["updated_at"] = _now_iso()
     _write_json_file(progress_path, progress)
 
-    return {"ok": True, "queue_action": action, "pending_remaining": len(kept), "phase": progress["phase"]}
+    result: dict[str, Any] = {
+        "ok": True,
+        "queue_action": action,
+        "pending_remaining": len(kept),
+        "phase": progress["phase"],
+    }
+
+    if not kept:
+        config_path = _review_path(git_root, CONFIG_FILE)
+        config = _read_json_file(config_path)
+        if config and str(config.get("workflow") or "") == "map-hyperplan":
+            queue_session_id = critic_queue.get("session_id")
+            config_session_id = config.get("session_id")
+            if queue_session_id and queue_session_id != config_session_id:
+                result["deactivate_skipped"] = "session_mismatch"
+            else:
+                config["active"] = False
+                config["deactivated_at"] = _now_iso()
+                _write_json_file(config_path, config)
+                result["deactivated"] = True
+
+    return result
 
 
 def parse_spec_frontmatter(text: str) -> dict[str, str]:
