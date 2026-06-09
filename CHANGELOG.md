@@ -9,6 +9,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - Public-prep hygiene: redact machine-specific paths, stop tracking engine-repo `.review/` session artifacts, add `SECURITY.md`, `CONTRIBUTING.md`, `.github/CODEOWNERS`, and extend stale-path CI scan
+- Public-prep engine hardening: validated PoC sandbox, fail-closed shell gates for MAP roles, install doctor fail-closed, MAP `.gitignore` block for consumer repos
+- Repository made public; GitHub topics (`cursor`, `ai-agents`, `merge-gate`, `multi-agent`); private vulnerability reporting enabled
+
+### Changed
+
+- One-time pre-public `git filter-repo` history rewrite (author email normalization; `.review/` removed from history). Existing clones must reset or re-clone — see [CONTRIBUTING.md](CONTRIBUTING.md#existing-clones-after-public-release)
 
 ## [1.1] - 2026-06-09
 
