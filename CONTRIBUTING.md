@@ -12,6 +12,24 @@ cd oh-my-cursor
 
 No external pip dependencies — tests and tooling use Python 3 stdlib only.
 
+## Existing clones (after public release)
+
+Before the repository went public (2026-06-09), maintainers ran a one-time `git filter-repo` history rewrite:
+
+- Normalized commit author email to `tizerluo@gmail.com`
+- Removed `.review/` paths from all historical commits
+
+**If your local clone predates that rewrite**, `git pull` will not fast-forward. Either:
+
+```bash
+git fetch origin
+git reset --hard origin/main
+```
+
+or delete the directory and `git clone` again. **Forks** created from pre-rewrite history should be deleted and re-forked from current `main`.
+
+Release tags (`v1.0.0`, `v1.0.2`, `v1.1`) were force-updated to point at the rewritten commits; same content, new SHAs.
+
 ## Install for local development
 
 ```bash

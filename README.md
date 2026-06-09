@@ -6,10 +6,12 @@ Independent, versioned **MAP (Multi-Agent Protocol)** engine for Cursor — hook
 
 ## Status
 
+- **Repository:** Public — [github.com/tizerluo/oh-my-cursor](https://github.com/tizerluo/oh-my-cursor)
 - **Version:** [v1.1](https://github.com/tizerluo/oh-my-cursor/releases/tag/v1.1) (see [CHANGELOG.md](CHANGELOG.md))
 - **Spec:** [`.specs/oh-my-cursor.md`](.specs/oh-my-cursor.md) (accepted via map-hyperplan)
-- **Tests:** 103+ via [`hooks/run_tests.sh`](hooks/run_tests.sh)
+- **Tests:** 140+ via [`hooks/run_tests.sh`](hooks/run_tests.sh)
 - **Live Spike:** Cursor 3.7.19+ — [docs/spike-verification.md](docs/spike-verification.md)
+- **Security:** [Private vulnerability reporting](https://github.com/tizerluo/oh-my-cursor/security/advisories/new) enabled — see [SECURITY.md](SECURITY.md)
 
 ## What is MAP?
 
@@ -29,6 +31,8 @@ oh-my-cursor (this repo)              Consumer repo (your project)
 Commander (parent agent) orchestrates subagents; hooks record evidence, enforce role permissions, and block merge until review requirements are met.
 
 ## Quick start
+
+If you cloned **before 2026-06-09** (pre-public history rewrite), reset or re-clone — see [Contributing — Existing clones](CONTRIBUTING.md#existing-clones-after-public-release).
 
 ```bash
 chmod +x hooks/run_tests.sh
