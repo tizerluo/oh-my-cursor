@@ -231,5 +231,80 @@ class PathAllowedTests(unittest.TestCase):
             self.assertTrue(self.rg._path_allowed(".specs/foo.md", [".specs/", ".review/"], root))
 
 
+class ReviewerLogicalRoleMergeGateTests(unittest.TestCase):
+    def setUp(self):
+        self.rg = load_review_gate()
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmpdir.name)
+        self.secret = self.tmp / "secret"
+        self.rg.bootstrap_secret(self.secret)
+        os.environ["OMC_SECRET_FILE"] = str(self.secret)
+        self.branch = "main"
+        self.head = "abc123"
+
+    def tearDown(self):
+        os.environ.pop("OMC_SECRET_FILE", None)
+        self._tmpdir.cleanup()
+
+    def test_general_purpose_marker_with_logical_role_passes_tier(self):
+        """Markers recorded as reviewer-grok (from logical role) satisfy REVIEWER_TYPES."""
+        root = self.tmp / "repo"
+        root.mkdir()
+        review = root / ".review"
+        review.mkdir()
+        (review / "config.json").write_text(
+            json.dumps(
+                {
+                    "active": True,
+                    "workflow": "multi-agent-pr",
+                    "tier": "standard",
+                    "models": ["reviewer-grok", "reviewer-codex", "reviewer-gemini"],
+                }
+            )
+            + "\n"
+        )
+        sess = review / "session" / self.branch / self.head
+        sess.mkdir(parents=True)
+        for subagent_type, model in (
+            ("reviewer-grok", "grok-build-0.1"),
+            ("reviewer-codex", "gpt-5.3-codex-high-fast"),
+            ("reviewer-gemini", "gemini-3.1-pro"),
+        ):
+            data = self.rg._seal_marker(
+                {
+                    "type": subagent_type,
+                    "branch": self.branch,
+                    "head_sha": self.head,
+                    "source": "cursor-subagentStop",
+                    "model": model,
+                }
+            )
+            (sess / f"{subagent_type}.json").write_text(json.dumps(data) + "\n")
+        coder_data = self.rg._seal_marker(
+            {
+                "type": "coder",
+                "branch": self.branch,
+                "head_sha": self.head,
+                "source": "cursor-subagentStop",
+                "model": "composer-2.5-fast",
+            }
+        )
+        (sess / "coder.json").write_text(json.dumps(coder_data) + "\n")
+        _write_verdict(
+            root,
+            self.branch,
+            self.head,
+            ["reviewer-grok", "reviewer-codex", "reviewer-gemini"],
+        )
+        with patch.object(self.rg, "inferred_minimum_tier", return_value=("hotfix", [], "test")):
+            ok, msg, _ = self.rg.validate_review_state(root, self.branch, self.head)
+        self.assertTrue(ok, msg)
+        completed = self.rg._completed_types(
+            self.rg._marker_payloads(root, self.branch, self.head),
+            self.rg.REVIEWER_TYPES,
+        )
+        self.assertEqual(completed, {"reviewer-grok", "reviewer-codex", "reviewer-gemini"})
+
+
 if __name__ == "__main__":
     unittest.main()

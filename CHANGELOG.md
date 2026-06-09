@@ -4,12 +4,24 @@ All notable changes to **oh-my-cursor** are documented here.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [1.0.2] - Unreleased
+## [Unreleased]
+
+### Fixed
+
+- **#8** Reviewer logical role mapping: `generalPurpose` reviewer spawns infer `reviewer-*` from prompt/model; merge-gate markers use logical role; Task denies invalid `subagent_type=reviewer-*` with spawn template
+
+### Planned
+
+- v2.0.0: remove legacy `.review-session/` read paths (target 2027-Q1)
+
+## [1.0.2] - 2026-06-09
 
 ### Fixed
 
 - **Issue #3** `check_merge_from_hook`: gate `map-hyperplan` deny on `config.active` only; inactive hyperplan falls through to `validate_review_state` for merge/protected push
 - **Issue #3** `advance_critic_queue`: auto-deactivate `config.active` when critic queue empties and session_id matches (or is absent)
+- **Issue #5** `OMC_LEGACY_SECRET_FILE` env override for legacy secret migration path
+- **Issue #6** `migrate_map_state` rollback validates `dest` paths under `manifest.repo`
 
 ### Changed
 
