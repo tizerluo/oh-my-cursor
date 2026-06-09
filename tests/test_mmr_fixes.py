@@ -134,7 +134,7 @@ class TaskAlignmentTests(unittest.TestCase):
 class MergeGateTests(unittest.TestCase):
     @patch.object(rg, "validate_review_state")
     @patch.object(rg, "load_map_context")
-    def test_hyperplan_merge_always_denied(self, load_ctx, validate):
+    def test_hyperplan_merge_denied_when_active(self, load_ctx, validate):
         load_ctx.return_value = {
             "git_root": Path("/repo"),
             "branch": "feat/x",
@@ -145,6 +145,22 @@ class MergeGateTests(unittest.TestCase):
         result = rg.check_merge_from_hook(data)
         self.assertEqual(result["permission"], "deny")
         validate.assert_not_called()
+
+    @patch.object(rg, "validate_review_state")
+    @patch.object(rg, "load_map_context")
+    def test_hyperplan_merge_fallthrough_when_inactive(self, load_ctx, validate):
+        load_ctx.return_value = {
+            "git_root": Path("/repo"),
+            "branch": "feat/x",
+            "head_sha": "abc",
+            "config": {"workflow": "map-hyperplan", "active": False},
+        }
+        validate.return_value = (False, "missing markers", "BLOCKED: markers")
+        data = {"command": "gh pr merge 1"}
+        result = rg.check_merge_from_hook(data)
+        validate.assert_called_once_with(Path("/repo"), "feat/x", "abc")
+        self.assertEqual(result["permission"], "deny")
+        self.assertEqual(result["user_message"], "missing markers")
 
 
 class LogicalRoleTests(unittest.TestCase):
