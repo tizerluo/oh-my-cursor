@@ -3,8 +3,8 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-SCAN_DIRS="hooks skills docs tests .github"
-SCAN_FILES="README.md install.sh CHANGELOG.md"
+SCAN_DIRS="hooks skills docs tests .github .specs"
+SCAN_FILES="README.md install.sh CHANGELOG.md SECURITY.md CONTRIBUTING.md"
 SELF="scripts/ci_check_stale_paths.sh"
 
 FAIL=0
@@ -37,6 +37,7 @@ scan() {
 
 scan 'tizer_mac_studio' 'machine-specific path (tizer_mac_studio)'
 scan '/Users/[^ ]+/\.cursor/hooks' 'hardcoded /Users/.../.cursor/hooks path'
+scan '/Users/[^ ]+/\.cursor/plans' 'hardcoded /Users/.../.cursor/plans path'
 scan '~/.cursor/hooks/review_gate' 'legacy ~/.cursor/hooks/review_gate in deliverables'
 scan 'Path\.home\(\)[[:space:]]*/[[:space:]]*["'\'']\.cursor["'\''][[:space:]]*/[[:space:]]*["'\'']skills' 'Path.home() skills fallback in deliverables'
 

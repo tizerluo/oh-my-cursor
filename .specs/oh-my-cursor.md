@@ -6,7 +6,7 @@ round: 2
 implementation_plan: ~/.cursor/plans/oh-my-cursor_map_extract_29b2ee1e.plan.md
 ---
 
-> **施工主文档：** 本 spec 已通过 map-hyperplan 审查（round 2）。结论已融合进 [`~/.cursor/plans/oh-my-cursor_map_extract_29b2ee1e.plan.md`](/Users/tizer_mac_studio/.cursor/plans/oh-my-cursor_map_extract_29b2ee1e.plan.md) — **实施以该 plan 为准**；本文档作设计审计存档。
+> **施工主文档：** 本 spec 已通过 map-hyperplan 审查（round 2）。结论已融合进 `~/.cursor/plans/oh-my-cursor_map_extract_29b2ee1e.plan.md` — **实施以该 plan 为准**；本文档作设计审计存档。
 
 # oh-my-cursor v1.0 — MAP Extraction Spec
 
