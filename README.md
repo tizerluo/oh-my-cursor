@@ -7,7 +7,7 @@ Independent, versioned **MAP (Multi-Agent Protocol)** engine for Cursor — hook
 ## Status
 
 - **Repository:** Public — [github.com/tizerluo/oh-my-cursor](https://github.com/tizerluo/oh-my-cursor)
-- **Version:** [v1.1](https://github.com/tizerluo/oh-my-cursor/releases/tag/v1.1) (see [CHANGELOG.md](CHANGELOG.md))
+- **Version:** [v1.2](https://github.com/tizerluo/oh-my-cursor/releases/tag/v1.2) (see [CHANGELOG.md](CHANGELOG.md))
 - **Spec:** [`.specs/oh-my-cursor.md`](.specs/oh-my-cursor.md) (accepted via map-hyperplan)
 - **Tests:** 140+ via [`hooks/run_tests.sh`](hooks/run_tests.sh)
 - **Live Spike:** Cursor 3.7.19+ — [docs/spike-verification.md](docs/spike-verification.md)
