@@ -41,13 +41,20 @@ def _write_session(
         (sess / f"{subagent_type}.json").write_text(json.dumps(data) + "\n", encoding="utf-8")
 
 
-def _write_verdict(root: Path, branch: str, head_sha: str, reviewers: list[str]) -> None:
+def _write_verdict(
+    root: Path,
+    branch: str,
+    head_sha: str,
+    reviewers: list[str],
+    *,
+    tree_sha: str = "",
+) -> None:
     (root / ".review" / "verdict.json").write_text(
         json.dumps(
             {
                 "branch": branch,
                 "head_sha": head_sha,
-                "tree_sha": "",
+                "tree_sha": tree_sha,
                 "tier": "standard",
                 "p0": 0,
                 "p1": 0,
@@ -57,6 +64,48 @@ def _write_verdict(root: Path, branch: str, head_sha: str, reviewers: list[str])
         + "\n",
         encoding="utf-8",
     )
+
+
+def _init_git_repo(root: Path, *, branch: str = "main") -> tuple[str, str]:
+    subprocess.run(["git", "init", "-b", branch], cwd=root, check=True, capture_output=True)
+    for key, value in (("user.email", "test@example.com"), ("user.name", "Test")):
+        subprocess.run(["git", "config", key, value], cwd=root, check=True, capture_output=True)
+    (root / "a.txt").write_text("hello\n", encoding="utf-8")
+    subprocess.run(["git", "add", "a.txt"], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=root, check=True, capture_output=True)
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return branch, head
+
+
+def _write_forged_marker(
+    rg,
+    root: Path,
+    branch: str,
+    head_sha: str,
+    *,
+    source: str = "cursor-subagentStop",
+    seal: str | None = None,
+) -> None:
+    sess = root / ".review" / "session" / branch / head_sha
+    sess.mkdir(parents=True, exist_ok=True)
+    data = rg._seal_marker(
+        {
+            "type": "reviewer-grok",
+            "branch": branch,
+            "head_sha": head_sha,
+            "source": source,
+            "model": "reviewer-grok",
+        }
+    )
+    if seal is not None:
+        data["seal"] = seal
+    (sess / "reviewer-grok.json").write_text(json.dumps(data) + "\n", encoding="utf-8")
 
 
 class MergeGateE2ETests(unittest.TestCase):
@@ -139,6 +188,102 @@ class MergeGateE2ETests(unittest.TestCase):
                 "config": json.loads((root / ".review/config.json").read_text()),
             }
             result = self.rg.check_merge_from_hook({"command": "git push origin feat/issue-3"})
+        self.assertEqual(result["permission"], "allow")
+
+    def test_forged_marker_bad_source_blocked(self):
+        root = self.tmp / "repo_forged_source"
+        root.mkdir()
+        self._config(root, "multi-agent-pr")
+        _write_forged_marker(self.rg, root, self.branch, self.head, source="manual-forge")
+        _write_verdict(root, self.branch, self.head, ["reviewer-grok"])
+        ok, _, agent = self.rg.validate_review_state(root, self.branch, self.head)
+        self.assertFalse(ok)
+        self.assertIn("forged", agent.lower())
+
+    def test_forged_marker_bad_seal_blocked(self):
+        root = self.tmp / "repo_forged_seal"
+        root.mkdir()
+        self._config(root, "multi-agent-pr")
+        _write_forged_marker(self.rg, root, self.branch, self.head, seal="deadbeef")
+        _write_verdict(root, self.branch, self.head, ["reviewer-grok"])
+        ok, _, agent = self.rg.validate_review_state(root, self.branch, self.head)
+        self.assertFalse(ok)
+        self.assertIn("forged", agent.lower())
+
+    def test_tree_sha_mismatch_blocked(self):
+        root = self.tmp / "repo_tree"
+        root.mkdir()
+        branch, head = _init_git_repo(root)
+        self._config(root, "multi-agent-pr")
+        _write_session(self.rg, root, branch, head)
+        _write_verdict(
+            root,
+            branch,
+            head,
+            ["reviewer-grok", "reviewer-codex", "reviewer-gemini"],
+            tree_sha="wrong-tree-sha",
+        )
+        with patch.object(self.rg, "inferred_minimum_tier", return_value=("hotfix", [], "test")):
+            ok, _, agent = self.rg.validate_review_state(root, branch, head)
+        self.assertFalse(ok)
+        self.assertIn("tree_sha mismatch", agent)
+
+    def test_protected_main_push_denied_via_check_merge_from_hook(self):
+        root = self.tmp / "repo_push"
+        root.mkdir()
+        _init_git_repo(root)
+        self._config(root, "multi-agent-pr")
+        data = {"tool_input": {"command": "git push origin main"}, "cwd": str(root)}
+        result = self.rg.check_merge_from_hook(data)
+        self.assertEqual(result["permission"], "deny")
+        self.assertIn("BLOCKED", result.get("agent_message", ""))
+
+    def test_forged_marker_blocked_via_check_merge_from_hook(self):
+        root = self.tmp / "repo_forged_hook"
+        root.mkdir()
+        branch, head = _init_git_repo(root)
+        self._config(root, "multi-agent-pr")
+        _write_forged_marker(self.rg, root, branch, head, seal="deadbeef")
+        _write_verdict(root, branch, head, ["reviewer-grok"])
+        data = {"tool_input": {"command": "git push"}, "cwd": str(root)}
+        result = self.rg.check_merge_from_hook(data)
+        self.assertEqual(result["permission"], "deny")
+        self.assertIn("forged", result.get("agent_message", "").lower())
+
+
+class EmptyRolePermissionTests(unittest.TestCase):
+    def setUp(self):
+        self.rg = load_review_gate()
+
+    def test_empty_role_denies_write_during_active_session(self):
+        ctx = {
+            "git_root": Path("/repo"),
+            "config": {"active": True, "workflow": "multi-agent-pr"},
+        }
+        data = {"tool_name": "Write", "tool_input": {"path": "src/app.py"}}
+        with patch.object(self.rg, "load_map_context", return_value=ctx):
+            result = self.rg.check_tool_permission_from_hook(data)
+        self.assertEqual(result["permission"], "deny")
+        self.assertIn("no MAP role", result.get("user_message", ""))
+
+    def test_empty_role_denies_delete_during_active_session(self):
+        ctx = {
+            "git_root": Path("/repo"),
+            "config": {"active": True, "workflow": "multi-agent-pr"},
+        }
+        data = {"tool_name": "Delete", "tool_input": {"path": "src/app.py"}}
+        with patch.object(self.rg, "load_map_context", return_value=ctx):
+            result = self.rg.check_tool_permission_from_hook(data)
+        self.assertEqual(result["permission"], "deny")
+
+    def test_empty_role_allows_non_write_tools(self):
+        ctx = {
+            "git_root": Path("/repo"),
+            "config": {"active": True, "workflow": "multi-agent-pr"},
+        }
+        data = {"tool_name": "Read", "tool_input": {"path": "src/app.py"}}
+        with patch.object(self.rg, "load_map_context", return_value=ctx):
+            result = self.rg.check_tool_permission_from_hook(data)
         self.assertEqual(result["permission"], "allow")
 
 
