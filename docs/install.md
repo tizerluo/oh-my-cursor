@@ -4,8 +4,18 @@ Install MAP hooks, skills, and agents into Cursor configuration.
 
 ## Requirements
 
-- Python 3
+- Python 3 (stdlib only — no pip dependencies)
 - Cursor with hooks support (3.7.19+ verified for subagentStop)
+
+## Pin a release
+
+For production installs, clone and check out a [release tag](https://github.com/tizerluo/oh-my-cursor/releases) rather than tracking `main`:
+
+```bash
+git clone https://github.com/tizerluo/oh-my-cursor.git
+cd oh-my-cursor
+git checkout v1.1   # or latest tag
+```
 
 ## Global install
 
@@ -17,11 +27,13 @@ chmod +x install.sh
 ./install.sh --copy
 ```
 
-**Development (symlink — requires explicit ack):**
+**Development (symlink — supply-chain risk):**
 
 ```bash
 ./install.sh --link --i-know-symlink-risk
 ```
+
+`--link` symlinks `review_gate.py` to your clone. If the clone moves, is deleted, or is replaced by an untrusted checkout, hooks may fail or execute unexpected code. Use only for active engine development on a trusted machine.
 
 ## Project install
 
@@ -51,6 +63,8 @@ python3 scripts/install.py --uninstall
 Copied/symlinked assets under `~/.cursor/` are not removed automatically.
 
 ## hooks.json merge behavior
+
+Install merges **MAP entries only** — commands that invoke `review_gate.py` from `hooks/hooks.json.template`. All other hook entries in your existing `hooks.json` are preserved unchanged.
 
 - Parses existing `hooks.json`; **preserves all non-MAP entries** (e.g. `rtk hook cursor`)
 - Replaces MAP entries (commands containing `review_gate.py`) from `hooks/hooks.json.template`

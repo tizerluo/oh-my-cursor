@@ -37,13 +37,17 @@ chmod +x hooks/run_tests.sh
 
 ## Install
 
+Pin a [release tag](https://github.com/tizerluo/oh-my-cursor/releases) for production. Prefer **`--copy`** (copies `review_gate.py` into `~/.cursor/hooks/`). **`--link`** symlinks to your clone — if the clone path changes or is untrusted, hooks may break or execute unexpected code; use only for active engine development with `--i-know-symlink-risk`.
+
 ```bash
 chmod +x install.sh
 ./install.sh --copy              # production default → ~/.cursor
 ./install.sh --link --i-know-symlink-risk
 ./install.sh --project /path/to/repo
-python3 scripts/install.py --doctor
+python3 scripts/install.py --doctor --security
 ```
+
+No external pip dependencies — Python 3 stdlib only.
 
 Details: [docs/install.md](docs/install.md) · [docs/security.md](docs/security.md) · [docs/state-migration.md](docs/state-migration.md) · [docs/integrations/issue-to-pr.md](docs/integrations/issue-to-pr.md)
 
@@ -72,6 +76,8 @@ export OMC_ROOT="$(pwd)"
 ## 2. Review state (`.review/` in consumer repos)
 
 All workflow progress is stored under **`.review/`** in the target git repo. These files are **ephemeral** — do not commit them. A new commit changes `HEAD` and invalidates prior markers and verdicts until reviewers re-run.
+
+**This engine repo does not commit `.review/`** — session artifacts belong in consumer project repos only. `.review/` is listed in `.gitignore` here.
 
 ```mermaid
 flowchart TB
@@ -189,6 +195,10 @@ sequenceDiagram
 | `sessionStart` | `session-resume` | Inject resume context + routing recommendations |
 
 Secret for marker sealing: `HOOKS_DIR/.review-gate-secret` (or `OMC_SECRET_FILE`). See [docs/security.md](docs/security.md).
+
+### Threat model
+
+MAP hooks run locally under a **trusted single user** on their machine. They enforce merge discipline inside Cursor sessions but **do not replace GitHub branch protection**, required status checks, or server-side review policies. Treat hooks as a developer aid; configure repository settings for team enforcement.
 
 ---
 
@@ -367,6 +377,8 @@ Further install and CI detail: [docs/architecture.md](docs/architecture.md)
 | Doc | Contents |
 |-----|----------|
 | [docs/architecture.md](docs/architecture.md) | Components, install targets, CI |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Clone, tests, MAP PR flow |
+| [SECURITY.md](SECURITY.md) | Vulnerability reporting |
 | [docs/install.md](docs/install.md) | Install modes and manifest |
 | [docs/security.md](docs/security.md) | Secret trust contract |
 | [docs/state-migration.md](docs/state-migration.md) | DEF-09 path migration |

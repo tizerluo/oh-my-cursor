@@ -11,5 +11,5 @@ hooks/spikes/*.log
 # OS
 .DS_Store
 
-# Review state (consumer repos; keep hyperplan artifacts for now)
-# .review/
+# Review state (consumer repos only; engine repo does not commit .review/)
+.review/

@@ -8,6 +8,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Public-prep hygiene: redact machine-specific paths, stop tracking engine-repo `.review/` session artifacts, add `SECURITY.md`, `CONTRIBUTING.md`, `.github/CODEOWNERS`, and extend stale-path CI scan
+
+## [1.1] - 2026-06-09
+
+### Added
+
 - **#1** [docs/workflows/plan-then-hyperplan.md](docs/workflows/plan-then-hyperplan.md): Plan → Hyperplan → merge-back workflow — P0/P1 fusion checklist, Configuration Gate (AskQuestion), debate `claims` acceptance guard alignment, extended anti-patterns
 
 ### Fixed

@@ -12,7 +12,7 @@ oh-my-cursor/
 ├── scripts/migrate_map_state.py
 ├── skills/                  # multi-agent-pr, map-*
 ├── agents/planner.md
-└── tests/                   # 98+ tests
+└── tests/                   # 103+ tests
 ```
 
 ## Install targets
@@ -56,7 +56,7 @@ python3 "$OMC_ROOT/hooks/review_gate.py" advance-fix-queue ...
 | multi-agent-pr | `multi-agent-pr` | Required |
 | map-hyperplan | `map-hyperplan` | Permanently blocked |
 | map-security | `map-security` | Conditional |
-| map-refactor | `map-refactor` | Standard |
+| map-refactor | `map-refactor` | Required + regression |
 
 Planning lifecycle: [workflows/plan-then-hyperplan.md](workflows/plan-then-hyperplan.md)
 
