@@ -1012,7 +1012,37 @@ def _shell_redirects_to_poc(
     return found
 
 
-_SHELL_COMPOUND_SEP = re.compile(r"(?:;|&&|\|\|)")
+def _strip_shell_redirects(command: str) -> str:
+    return _SHELL_REDIRECT_TARGET.sub("", command)
+
+
+def _poc_shell_has_expansion(command: str) -> bool:
+    if re.search(r"\$\(", command):
+        return True
+    if "`" in command:
+        return True
+    if re.search(r"<\(", command):
+        return True
+    return False
+
+
+def _poc_shell_redirect_only(
+    command: str, git_root: Path, config: dict[str, Any]
+) -> bool:
+    """True only when PoC writes use redirects alone (no cp/mv/tee/heredoc/etc.)."""
+    if not _shell_redirects_to_poc(command, git_root, config):
+        return False
+    if _poc_shell_has_expansion(command):
+        return False
+    remainder = _strip_shell_redirects(command)
+    if SHELL_WRITE_PATTERN.search(remainder):
+        return False
+    return True
+
+
+_SHELL_COMPOUND_SEP = re.compile(
+    r"(?:;|&&|\|\||(?<!\|)\|(?!\|)|(?<!&)&(?!&)|\n)"
+)
 
 
 def _shell_write_blocked(
@@ -1031,7 +1061,7 @@ def _shell_write_blocked(
     if logical_role == "poc-exploit":
         if _SHELL_COMPOUND_SEP.search(command):
             return True
-        if _shell_redirects_to_poc(command, root, cfg):
+        if _poc_shell_redirect_only(command, root, cfg):
             return False
     return True
 

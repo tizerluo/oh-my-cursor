@@ -391,6 +391,45 @@ class ShellWriteTests(unittest.TestCase):
                 ),
             )
 
+    def test_poc_precmd_redirect_blocked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".review" / "poc").mkdir(parents=True)
+            self.assertTrue(
+                rg._shell_write_blocked(
+                    "cp /etc/shadow /tmp/leak > .review/poc/x",
+                    "poc-exploit",
+                    git_root=root,
+                    config={},
+                ),
+            )
+
+    def test_poc_pipe_after_redirect_blocked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".review" / "poc").mkdir(parents=True)
+            self.assertTrue(
+                rg._shell_write_blocked(
+                    "echo x > .review/poc/x | sh",
+                    "poc-exploit",
+                    git_root=root,
+                    config={},
+                ),
+            )
+
+    def test_poc_command_substitution_blocked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".review" / "poc").mkdir(parents=True)
+            self.assertTrue(
+                rg._shell_write_blocked(
+                    "echo $(cat /etc/passwd) > .review/poc/x",
+                    "poc-exploit",
+                    git_root=root,
+                    config={},
+                ),
+            )
+
 
 class StopCheckTests(unittest.TestCase):
     @patch.object(rg, "_critic_queue_followup")
