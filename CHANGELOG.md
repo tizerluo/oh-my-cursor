@@ -12,11 +12,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **#7** P2 hardening: `failClosed: true` on `check-merge` / `check-task-alignment` preToolUse hooks; `O_NOFOLLOW` on marker create; `REVIEW_GATE_TIMEOUT` stderr on subprocess timeout (returncode 124)
 - **#8** Reviewer logical role mapping: `generalPurpose` reviewer spawns infer `reviewer-*` from prompt/model; merge-gate markers use logical role; Task denies invalid `subagent_type=reviewer-*` with spawn template
 - **#4** Hyperplan: `advance_critic_queue` requires non-empty debate `claims` before `accepted`; Configuration Gate in map-hyperplan SKILL; sessionStart hints
 
 ### Changed
 
+- **#7** Shared `tests/map_test_helpers.py` (`load_review_gate`, `SecretBootstrapMixin`) for def09 / security / merge-gate e2e tests
 - [skills/map-hyperplan/SKILL.md](skills/map-hyperplan/SKILL.md): cross-reference merge-back checklist and debate claims requirement in workflow doc
 
 ### Planned

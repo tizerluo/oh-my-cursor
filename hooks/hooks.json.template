@@ -19,11 +19,13 @@
       {
         "command": "python3 {{REVIEW_GATE_QUOTED_PATH}} check-merge",
         "matcher": "Shell",
+        "failClosed": true,
         "omc": true
       },
       {
         "command": "python3 {{REVIEW_GATE_QUOTED_PATH}} check-task-alignment",
         "matcher": "Task",
+        "failClosed": true,
         "omc": true
       },
       {

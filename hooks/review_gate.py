@@ -360,6 +360,10 @@ def _run_subprocess(
             timeout=_SUBPROCESS_TIMEOUT,
         )
     except subprocess.TimeoutExpired:
+        print(
+            f"REVIEW_GATE_TIMEOUT: {' '.join(cmd)} exceeded {_SUBPROCESS_TIMEOUT}s",
+            file=sys.stderr,
+        )
         return subprocess.CompletedProcess(cmd, returncode=124, stdout="", stderr="")
 
 
@@ -709,7 +713,7 @@ def _write_marker(git_root: Path, branch: str, head_sha: str, data: dict[str, An
     raw = json.dumps(data, sort_keys=True)
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
     marker = head_dir / f"{_slug(str(data.get('type', 'unknown')))}-{digest}.json"
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     try:
         fd = os.open(marker, flags, 0o600)
     except FileExistsError:

@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import subprocess
@@ -13,15 +12,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-HOOKS_DIR = Path(__file__).resolve().parents[1] / "hooks"
-
-
-def load_review_gate():
-    spec = importlib.util.spec_from_file_location("review_gate", HOOKS_DIR / "review_gate.py")
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
+from map_test_helpers import load_review_gate
 
 
 def _write_session(
