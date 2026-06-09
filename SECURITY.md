@@ -18,4 +18,4 @@ This policy covers the oh-my-cursor MAP engine (hooks, install tooling, skills, 
 
 ## Secret handling
 
-MAP merge-gate markers rely on a local HMAC secret. See [docs/security.md](docs/security.md) for the trust contract and `omc doctor --security` verification.
+MAP merge-gate markers rely on a local HMAC secret. See [docs/security.md](docs/security.md) for the trust contract and run `python3 scripts/install.py --doctor --security` after install.
