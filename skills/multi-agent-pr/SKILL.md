@@ -447,29 +447,32 @@ Prompt must include:
 
 ### 6. Review Gate
 
-Hotfix review path:
+Cursor Task only accepts platform subagent types (`generalPurpose`, `coder`, etc.). MAP logical roles `reviewer-*` are **not** valid Task enums — spawn reviewers via the platform table below so hooks record the correct marker `type`.
+
+| MAP logical role | Platform `subagent_type` | `readonly` | Model (seat) |
+|------------------|--------------------------|------------|--------------|
+| `reviewer-grok` | `generalPurpose` | `true` | `grok-build-0.1` |
+| `reviewer-codex` | `generalPurpose` | `true` | `gpt-5.3-codex-high-fast` |
+| `reviewer-gemini` | `generalPurpose` | `true` | `gemini-3.1-pro` |
+
+Each reviewer prompt must include `logical_role: reviewer-<engine>` (or `Reviewer-Grok` / `Reviewer-Codex` / `Reviewer-Gemini`) so `subagentStart` writes the correct role file and `subagentStop` emits a `reviewer-*` merge-gate marker.
+
+Hotfix review path (one reviewer):
 
 ```
-Task(subagent_type="reviewer-grok", model="grok-build-0.1", run_in_background=true)
+Task(subagent_type="generalPurpose", model="grok-build-0.1", readonly=true,
+     prompt="You are MAP Reviewer-Grok. logical_role: reviewer-grok\n...")
 ```
 
-Hotfix reviewer prompt must include:
-- Exact diff or list of changed files
-- Why Commander believes this is Hotfix
-- The failure being fixed
-- Any cross-module contract assumptions to verify
-
-Standard/Large review path:
-
-Launch **three subagents in parallel** in one message:
+Standard/Large review path — launch **three subagents in parallel** in one message:
 
 ```
-Task(subagent_type="reviewer-grok",   model="grok-build-0.1",         ...)
-Task(subagent_type="reviewer-codex",  model="gpt-5.3-codex-high-fast", ...)
-Task(subagent_type="reviewer-gemini", model="gemini-3.1-pro",          ...)
+Task(subagent_type="generalPurpose", model="grok-build-0.1",         readonly=true, prompt="... logical_role: reviewer-grok\n...")
+Task(subagent_type="generalPurpose", model="gpt-5.3-codex-high-fast", readonly=true, prompt="... logical_role: reviewer-codex\n...")
+Task(subagent_type="generalPurpose", model="gemini-3.1-pro",          readonly=true, prompt="... logical_role: reviewer-gemini\n...")
 ```
 
-Each reviewer prompt must include:
+Do **not** use `Task(subagent_type="reviewer-grok", ...)` — Cursor rejects it; the pre-Task hook denies it with the spawn template above.
 - Path to spec file
 - List of ALL files to read
 - Their specific focus area

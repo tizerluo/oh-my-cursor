@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -129,6 +130,124 @@ class TaskAlignmentTests(unittest.TestCase):
         )
         result = rg.check_task_alignment_from_hook(payload)
         self.assertEqual(result["permission"], "allow")
+
+    @patch.object(rg, "load_map_context")
+    def test_task_spawn_reviewer_grok_denied_with_hint(self, load_ctx):
+        load_ctx.return_value = {
+            "config": {
+                "active": True,
+                "session_id": "s1",
+                "workflow": "multi-agent-pr",
+                "roles": {},
+            },
+            "progress": {"session_id": "s1", "phase": "review-pending"},
+        }
+        payload = self._payload(
+            tool_input={
+                "subagent_type": "reviewer-grok",
+                "model": "grok-build-0.1",
+                "prompt": "review code",
+            },
+        )
+        result = rg.check_task_alignment_from_hook(payload)
+        self.assertEqual(result["permission"], "deny")
+        self.assertIn("generalPurpose", result["agent_message"])
+        self.assertIn("readonly", result["agent_message"])
+        self.assertIn("reviewer-grok", result["agent_message"])
+
+
+class ReviewerLogicalRoleInferenceTests(unittest.TestCase):
+    def test_infer_from_logical_role_prompt(self):
+        role = rg._infer_reviewer_logical_role(
+            "",
+            "You are MAP. logical_role: reviewer-codex\nReview files.",
+        )
+        self.assertEqual(role, "reviewer-codex")
+
+    def test_infer_from_reviewer_grok_label(self):
+        role = rg._infer_reviewer_logical_role("", "You are Reviewer-Grok for PR 8.")
+        self.assertEqual(role, "reviewer-grok")
+
+    def test_infer_from_model_map(self):
+        self.assertEqual(
+            rg._infer_reviewer_logical_role("gemini-3.1-pro", ""),
+            "reviewer-gemini",
+        )
+
+    @patch.object(rg, "load_map_context")
+    @patch.object(rg, "_write_json_file")
+    def test_set_role_infers_reviewer_from_general_purpose_prompt(self, write_json, load_ctx):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".review").mkdir()
+            load_ctx.return_value = {
+                "git_root": root,
+                "config": {"active": True, "session_id": "s1", "workflow": "multi-agent-pr"},
+                "progress": {"session_id": "s1", "phase": "review-pending"},
+            }
+            rg.set_role_from_hook(
+                {
+                    "subagent_type": "generalPurpose",
+                    "subagent_id": "rev-1",
+                    "tool_input": {
+                        "prompt": "MAP Reviewer-Grok. logical_role: reviewer-grok",
+                        "model": "grok-build-0.1",
+                    },
+                }
+            )
+            role_writes = [
+                call[0][1]
+                for call in write_json.call_args_list
+                if call[0][1].get("subagent_id") == "rev-1"
+            ]
+            self.assertEqual(role_writes[0]["logical_role"], "reviewer-grok")
+            self.assertEqual(role_writes[0]["subagent_type"], "generalPurpose")
+
+
+class RecordSubagentMarkerTests(unittest.TestCase):
+    @patch.dict(os.environ, {"REVIEW_GATE_HOOK_MODE": "subagentStop"}, clear=False)
+    @patch.object(rg, "load_map_context")
+    def test_record_subagent_marker_type_from_logical_role(self, load_ctx):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            review = root / ".review"
+            roles = review / "roles"
+            roles.mkdir(parents=True)
+            (roles / "agent-42.json").write_text(
+                json.dumps(
+                    {
+                        "subagent_id": "agent-42",
+                        "logical_role": "reviewer-grok",
+                        "subagent_type": "generalPurpose",
+                    }
+                )
+            )
+            branch = "feat/x"
+            head = "deadbeef"
+            load_ctx.return_value = {
+                "git_root": root,
+                "branch": branch,
+                "head_sha": head,
+                "tree_sha": "",
+                "config": {"workflow": "multi-agent-pr"},
+            }
+            secret = root / "secret"
+            rg.bootstrap_secret(secret)
+            with patch.dict(os.environ, {"OMC_SECRET_FILE": str(secret)}):
+                data = {
+                    "event": "subagentStop",
+                    "subagent_type": "generalPurpose",
+                    "subagent_id": "agent-42",
+                    "model": "grok-build-0.1",
+                    "cwd": str(root),
+                }
+                result = rg.record_subagent_from_hook(data, json.dumps(data))
+            self.assertIn("reviewer-grok", result.get("followup_message", ""))
+            sess = root / ".review" / "session" / rg._slug(branch) / head
+            markers = list(sess.glob("*.json"))
+            self.assertTrue(markers)
+            marker = json.loads(markers[0].read_text())
+            self.assertEqual(marker["type"], "reviewer-grok")
 
 
 class MergeGateTests(unittest.TestCase):
