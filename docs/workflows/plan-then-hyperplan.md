@@ -42,7 +42,8 @@ flowchart LR
 - [ ] 在原 plan 顶部注明 hyperplan 来源与 spec 路径
 - [ ] 在 `.specs/*.md` frontmatter 增加 `implementation_plan` 回指主 plan
 - [ ] 清空 `.review/critic-queue.json` 或确认无 unresolved P0
-- [ ] **再**进入 Phase 1 代码实施（hyperplan 本身不写业务代码）
+- [ ] 确认 `config.active: false`（critic-queue 清空后 `advance_critic_queue` 会自动 teardown；手动清空时需自行设 `active: false`）
+- [ ] **再**进入 Phase 1 代码实施（`multi-agent-pr` 或 coder；hyperplan 本身不写业务代码）
 
 ## 反模式（oh-my-cursor 项目曾发生）
 
