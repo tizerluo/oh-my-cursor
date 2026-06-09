@@ -36,6 +36,26 @@ class SecurityCodeModifiedTests(unittest.TestCase):
         with patch.object(rg, "_git_diff_files", return_value=changed):
             self.assertFalse(rg._security_code_modified(Path("/repo"), config))
 
+    def test_poc_sandbox_dot_does_not_disable_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".review" / "poc").mkdir(parents=True)
+            config = {"scope_paths": ["src/auth/"], "poc_sandbox": "."}
+            changed = ["src/other/y.py"]
+            with patch.object(rg, "_git_diff_files", return_value=changed):
+                self.assertTrue(rg._security_code_modified(root, config))
+            self.assertEqual(rg._validated_poc_sandbox(root, config), ".review/poc/")
+
+    def test_poc_sandbox_review_poc_allowed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".review" / "poc").mkdir(parents=True)
+            config = {"scope_paths": ["src/auth/"], "poc_sandbox": ".review/poc"}
+            changed = [".review/poc/exploit.py"]
+            with patch.object(rg, "_git_diff_files", return_value=changed):
+                self.assertFalse(rg._security_code_modified(root, config))
+            self.assertEqual(rg._validated_poc_sandbox(root, config), ".review/poc/")
+
 
 class TaskAlignmentTests(unittest.TestCase):
     def _payload(self, **kwargs):
@@ -333,9 +353,43 @@ class ShellWriteTests(unittest.TestCase):
         self.assertFalse(rg._shell_write_blocked("git diff HEAD~1", "explore"))
 
     def test_poc_redirect_allowed(self):
-        self.assertFalse(
-            rg._shell_write_blocked("echo poc > .review/poc/x.py", "poc-exploit"),
-        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".review" / "poc").mkdir(parents=True)
+            self.assertFalse(
+                rg._shell_write_blocked(
+                    "echo poc > .review/poc/x.py",
+                    "poc-exploit",
+                    git_root=root,
+                    config={},
+                ),
+            )
+
+    def test_poc_traversal_redirect_blocked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".review" / "poc").mkdir(parents=True)
+            self.assertTrue(
+                rg._shell_write_blocked(
+                    "echo x > .review/poc/../../etc/passwd",
+                    "poc-exploit",
+                    git_root=root,
+                    config={},
+                ),
+            )
+
+    def test_poc_compound_write_blocked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".review" / "poc").mkdir(parents=True)
+            self.assertTrue(
+                rg._shell_write_blocked(
+                    "echo poc > .review/poc/ok.txt; cp /etc/hosts /tmp/leak.txt",
+                    "poc-exploit",
+                    git_root=root,
+                    config={},
+                ),
+            )
 
 
 class StopCheckTests(unittest.TestCase):

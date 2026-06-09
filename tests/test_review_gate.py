@@ -320,6 +320,93 @@ class DebateValidationTests(unittest.TestCase):
         self.assertIn("non-empty", msg)
 
 
+class DebateReportRoundTests(unittest.TestCase):
+    def test_latest_debate_prefers_queue_round_over_newer_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reports = root / ".review" / "reports"
+            reports.mkdir(parents=True)
+            (reports / "debate-round-1.json").write_text(
+                json.dumps(
+                    {
+                        "session_id": "s1",
+                        "round": 1,
+                        "claims": [{"id": "c1", "text": "x", "author": "critic"}],
+                        "counterclaims": [],
+                        "evidence": [],
+                        "unresolved": [],
+                        "consensus_items": [],
+                    }
+                )
+            )
+            (reports / "debate-round-2.json").write_text(
+                json.dumps(
+                    {
+                        "session_id": "s1",
+                        "round": 2,
+                        "claims": [],
+                        "counterclaims": [],
+                        "evidence": [],
+                        "unresolved": [],
+                        "consensus_items": [],
+                    }
+                )
+            )
+            chosen = rg._latest_debate_report(root, 1)
+            self.assertEqual(chosen, reports / "debate-round-1.json")
+
+    def test_latest_debate_returns_none_when_round_file_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reports = root / ".review" / "reports"
+            reports.mkdir(parents=True)
+            (reports / "debate-round-2.json").write_text("{}")
+            self.assertIsNone(rg._latest_debate_report(root, 1))
+
+    def test_advance_uses_critic_queue_round_not_latest_mtime(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".review").mkdir()
+            reports = root / ".review" / "reports"
+            reports.mkdir()
+            (reports / "debate-round-1.json").write_text(
+                json.dumps(
+                    {
+                        "session_id": "s1",
+                        "round": 1,
+                        "claims": [],
+                        "counterclaims": [],
+                        "evidence": [],
+                        "unresolved": [],
+                        "consensus_items": [],
+                    }
+                )
+            )
+            (reports / "debate-round-2.json").write_text(
+                json.dumps(
+                    {
+                        "session_id": "s1",
+                        "round": 2,
+                        "claims": [{"id": "c1", "text": "x", "author": "critic"}],
+                        "counterclaims": [],
+                        "evidence": [],
+                        "unresolved": [],
+                        "consensus_items": [],
+                    }
+                )
+            )
+            (root / ".review/critic-queue.json").write_text(
+                json.dumps({"round": 2, "pending_items": [{"id": "sec", "desc": "d"}]})
+            )
+            (root / ".review/config.json").write_text(
+                json.dumps({"workflow": "map-hyperplan", "active": True})
+            )
+            (root / ".review/progress.json").write_text(json.dumps({"phase": "debate"}))
+            result = rg.advance_critic_queue(root, mark_resolved_ids=["sec"])
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["phase"], "accepted")
+
+
 class HyperplanAcceptanceTests(unittest.TestCase):
     def test_advance_rejects_without_debate_claims(self):
         with tempfile.TemporaryDirectory() as tmp:

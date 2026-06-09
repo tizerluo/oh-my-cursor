@@ -300,6 +300,21 @@ class ShellPermissionTests(unittest.TestCase):
     def test_tee_help_not_blocked(self):
         self.assertFalse(self.rg._shell_write_blocked("tee --help", "reviewer-grok"))
 
+    def test_explore_shell_write_denied_without_unbound_git_root(self):
+        ctx = {
+            "git_root": Path("/repo"),
+            "config": {"active": True, "workflow": "multi-agent-pr"},
+            "role": "explore",
+        }
+        data = {
+            "tool_name": "Shell",
+            "tool_input": {"command": "echo x > /tmp/out.txt"},
+        }
+        with patch.object(self.rg, "load_map_context", return_value=ctx):
+            with patch.object(self.rg, "_role_for_permission", return_value=("explore", {})):
+                result = self.rg.check_tool_permission_from_hook(data)
+        self.assertEqual(result["permission"], "deny")
+
 
 class MapExemptTaskTests(unittest.TestCase):
     def setUp(self):

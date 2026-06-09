@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
@@ -147,6 +148,33 @@ class InstallIntegrationTests(unittest.TestCase):
             omc_install.install("copy", project=project)
             gitignore = (project / ".gitignore").read_text(encoding="utf-8")
             self.assertIn(".cursor/hooks/.review-gate-secret", gitignore)
+            self.assertIn(omc_install.GITIGNORE_MAP_MARKER, gitignore)
+            self.assertIn(".review/", gitignore)
+
+    def test_ensure_project_gitignore_map_block_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "myrepo"
+            project.mkdir()
+            gitignore = project / ".gitignore"
+            gitignore.write_text(f"{omc_install.GITIGNORE_SECRET_LINE}\n", encoding="utf-8")
+            omc_install.ensure_project_gitignore(project)
+            content = gitignore.read_text(encoding="utf-8")
+            self.assertIn(omc_install.GITIGNORE_MAP_MARKER, content)
+            self.assertEqual(content.count(omc_install.GITIGNORE_MAP_MARKER), 1)
+            omc_install.ensure_project_gitignore(project)
+            self.assertEqual(
+                gitignore.read_text(encoding="utf-8").count(omc_install.GITIGNORE_MAP_MARKER),
+                1,
+            )
+
+    @patch.object(omc_install, "run_doctor", return_value=1)
+    def test_install_fails_when_doctor_fails(self, _doctor):
+        with tempfile.TemporaryDirectory() as tmp:
+            cursor_dir = Path(tmp) / ".cursor"
+            cursor_dir.mkdir()
+            with self.assertRaises(omc_install.InstallError) as ctx:
+                omc_install.install("copy", target=cursor_dir)
+            self.assertIn("doctor failed", str(ctx.exception))
 
     def test_uninstall_restores_backup(self):
         with tempfile.TemporaryDirectory() as tmp:

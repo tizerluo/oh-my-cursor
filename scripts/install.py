@@ -21,6 +21,15 @@ OMC_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE_PATH = OMC_ROOT / "hooks" / "hooks.json.template"
 INSTALL_MANIFEST = "omc-install.json"
 GITIGNORE_SECRET_LINE = ".cursor/hooks/.review-gate-secret"
+GITIGNORE_MAP_MARKER = "# MAP review state (oh-my-cursor)"
+GITIGNORE_MAP_LINES = (
+    GITIGNORE_MAP_MARKER,
+    ".review/",
+    ".review-session/",
+    ".review-verdict.json",
+    ".review-session.json",
+)
+INSTALL_REMINDER = "Reminder: do not commit .review/ in consumer repos."
 
 MAP_SKILL_DIRS = ("multi-agent-pr", "map-hyperplan", "map-security", "map-refactor")
 MAP_SKILL_FILES = ("MAP_SKILL_DISCOVERY.md",)
@@ -331,17 +340,26 @@ def install_agents(cursor_dir: Path, mode: str) -> None:
 
 def ensure_project_gitignore(project_root: Path) -> None:
     gitignore = project_root / ".gitignore"
-    line = GITIGNORE_SECRET_LINE
     if gitignore.is_file():
         content = gitignore.read_text(encoding="utf-8")
-        if line in content.splitlines():
-            return
-        with gitignore.open("a", encoding="utf-8") as fh:
-            if content and not content.endswith("\n"):
-                fh.write("\n")
-            fh.write(f"{line}\n")
+        lines = content.splitlines()
     else:
-        gitignore.write_text(f"{line}\n", encoding="utf-8")
+        content = ""
+        lines = []
+
+    additions: list[str] = []
+    if GITIGNORE_SECRET_LINE not in lines:
+        additions.append(GITIGNORE_SECRET_LINE)
+    if GITIGNORE_MAP_MARKER not in lines:
+        additions.extend(GITIGNORE_MAP_LINES)
+
+    if not additions:
+        return
+
+    with gitignore.open("a", encoding="utf-8") as fh:
+        if content and not content.endswith("\n"):
+            fh.write("\n")
+        fh.write("\n".join(additions) + "\n")
 
 
 def write_install_manifest(
@@ -558,9 +576,12 @@ def install(
     if backup != hooks_json:
         print(f"  hooks.json backup: {backup}")
     if project is not None:
-        print(f"  .gitignore:        {project / '.gitignore'} (+ secret line)")
+        print(f"  .gitignore:        {project / '.gitignore'} (+ secret/MAP lines)")
     print()
-    run_doctor(cursor_dir)
+    rc = run_doctor(cursor_dir)
+    if rc != 0:
+        raise InstallError("doctor failed")
+    print(INSTALL_REMINDER)
 
 
 def build_parser() -> argparse.ArgumentParser:

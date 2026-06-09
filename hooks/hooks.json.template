@@ -39,6 +39,7 @@
       {
         "command": "python3 {{REVIEW_GATE_QUOTED_PATH}} set-role",
         "matcher": "coder|architect|tester-writer|reviewer-grok|reviewer-codex|reviewer-gemini|explore|generalPurpose|planner",
+        "failClosed": true,
         "omc": true
       }
     ],
