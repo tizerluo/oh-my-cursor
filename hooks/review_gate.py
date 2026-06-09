@@ -207,15 +207,20 @@ DANGEROUS_SHELL_PATTERN = re.compile(
     r"\b(rm\s+-rf|curl\s+|wget\s+|chmod\s+777|>\s*/dev/|mkfs\b|dd\s+if=)",
     re.I,
 )
+_SHELL_FD_REDIRECT = r"(?:\d{1,2})?>>?"
 SHELL_WRITE_PATTERN = re.compile(
-    r"(?:^|[;&|]\s*)(?:[^\n]*\s)?(?:>|>>)\s*(?!/dev/null\b)"
+    rf"(?:^|[;&|]\s*)(?:[^\n]*\s)?{_SHELL_FD_REDIRECT}\s*(?!/dev/null\b)"
     r"|\btee\s+(?:-a\s+)?(?!-)\S"
     r"|\bsponge\s+"
-    r"|\b(?:cat|python3?|node|ruby|perl)\b[^\n]*(?:>|>>)\s*"
+    rf"|\b(?:cat|python3?|node|ruby|perl)\b[^\n]*{_SHELL_FD_REDIRECT}\s*"
     r"|<<-?\s*['\"]?\w+['\"]?\s*$"
     r"|\b(?:sed|awk)\b[^\n]*\s-i\b"
     r"|\b(?:cp|mv|install|touch|mkdir)\s+",
     re.I | re.M,
+)
+_SHELL_OUTPUT_FLAG = re.compile(
+    r"(?:^|\s)--(?:output|junitxml|log-file|result-log)(?:=\S+|\s+\S+)",
+    re.I,
 )
 SHELL_READONLY_PREFIXES = (
     re.compile(r"^\s*git\s+(diff|log|show|status|branch|rev-parse)\b", re.I),
@@ -972,7 +977,7 @@ def _validated_poc_sandbox(git_root: Path, config: dict[str, Any]) -> str:
     return posix.rstrip("/") + "/"
 
 
-_SHELL_REDIRECT_TARGET = re.compile(r"(?:>|>>)\s*([^\s;|&]+)")
+_SHELL_REDIRECT_TARGET = re.compile(rf"{_SHELL_FD_REDIRECT}\s*([^\s;|&]+)")
 
 
 def _shell_redirect_target_unsafe(target: str) -> bool:
@@ -1061,10 +1066,15 @@ _SHELL_COMPOUND_SEP = re.compile(
 )
 
 
+def _shell_has_output_flag(command: str) -> bool:
+    return bool(_SHELL_OUTPUT_FLAG.search(command))
+
+
 def _shell_readonly_safe(command: str) -> bool:
     return (
         _shell_looks_readonly(command)
         and not SHELL_WRITE_PATTERN.search(command)
+        and not _shell_has_output_flag(command)
         and not _SHELL_COMPOUND_SEP.search(command)
         and not _poc_shell_has_expansion(command)
     )

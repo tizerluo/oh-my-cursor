@@ -553,6 +553,14 @@ class ReviewerExploreShellPermissionTests(unittest.TestCase):
         self.assertEqual(result["permission"], "deny")
         self.assertIn("redirect", result.get("agent_message", "").lower())
 
+    def test_git_diff_fd_redirect_denied_for_reviewer(self):
+        result = self._check("git diff 1>/tmp/x", "reviewer-grok")
+        self.assertEqual(result["permission"], "deny")
+
+    def test_git_diff_output_flag_denied_for_reviewer(self):
+        result = self._check("git diff --output=../../x", "reviewer-grok")
+        self.assertEqual(result["permission"], "deny")
+
     def test_git_diff_cmdsub_denied_for_reviewer(self):
         result = self._check('git diff $(python3 -c "print(1)")', "reviewer-grok")
         self.assertEqual(result["permission"], "deny")
