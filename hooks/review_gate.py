@@ -1044,6 +1044,8 @@ def _poc_shell_redirect_only(
     command: str, git_root: Path, config: dict[str, Any]
 ) -> bool:
     """True only when PoC writes use redirects alone (no cp/mv/tee/heredoc/etc.)."""
+    if _SHELL_COMPOUND_SEP.search(command):
+        return False
     if not _shell_redirects_to_poc(command, git_root, config):
         return False
     if _poc_shell_has_expansion(command):
@@ -2197,13 +2199,17 @@ def check_tool_permission_from_hook(data: dict[str, Any]) -> dict[str, Any]:
                     "agent_message": "BLOCKED: poc-exploit shell allowlist.",
                 }
         else:
-            restricted_shell_roles = {
-                "explore",
-                "planner",
-                "generalPurpose",
-            }
-            if role.startswith("reviewer-") or role in restricted_shell_roles:
-                if _shell_write_blocked(command, role, git_root=git_root, config=config):
+            if role.startswith("reviewer-") or role == "explore":
+                if not _shell_looks_readonly(command):
+                    return {
+                        "permission": "deny",
+                        "user_message": "Shell file-write pattern blocked for read-only MAP role.",
+                        "agent_message": "BLOCKED: use allowed Write tool paths instead of shell redirects.",
+                    }
+            elif role in {"planner", "generalPurpose"}:
+                if _shell_write_blocked(
+                    command, role, git_root=git_root, config=config
+                ):
                     return {
                         "permission": "deny",
                         "user_message": "Shell file-write pattern blocked for read-only MAP role.",

@@ -506,6 +506,36 @@ class PocExploitShellPermissionTests(unittest.TestCase):
             )
         self.assertEqual(result["permission"], "allow")
 
+    def test_compound_echo_python3_denied(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".review" / "poc").mkdir(parents=True)
+            result = self._check(
+                'echo ok > .review/poc/x; python3 -c "open(\'/tmp/x\',\'w\')"',
+                git_root=root,
+            )
+        self.assertEqual(result["permission"], "deny")
+
+
+class ReviewerExploreShellPermissionTests(unittest.TestCase):
+    def _check(self, command: str, role: str):
+        ctx = {
+            "git_root": Path("/repo"),
+            "config": {"active": True, "workflow": "multi-agent-pr"},
+        }
+        data = {"tool_name": "Shell", "tool_input": {"command": command}}
+        with patch.object(rg, "load_map_context", return_value=ctx):
+            with patch.object(rg, "_role_for_permission", return_value=(role, {})):
+                return rg.check_tool_permission_from_hook(data)
+
+    def test_python3_c_denied_for_reviewer(self):
+        result = self._check('python3 -c "print(1)"', "reviewer-grok")
+        self.assertEqual(result["permission"], "deny")
+
+    def test_git_diff_allowed_for_explore(self):
+        result = self._check("git diff HEAD~1", "explore")
+        self.assertEqual(result["permission"], "allow")
+
 
 class StopCheckTests(unittest.TestCase):
     @patch.object(rg, "_critic_queue_followup")
