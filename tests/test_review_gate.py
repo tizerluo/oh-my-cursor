@@ -16,6 +16,24 @@ sys.path.insert(0, str(HOOKS_DIR))
 import review_gate as rg  # noqa: E402
 
 
+def _write_valid_debate_round(root: Path, session_id: str = "s1") -> None:
+    reports = root / ".review" / "reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    (reports / "debate-round-1.json").write_text(
+        json.dumps(
+            {
+                "session_id": session_id,
+                "round": 1,
+                "claims": [{"id": "c1", "text": "x", "author": "critic"}],
+                "counterclaims": [],
+                "evidence": [],
+                "unresolved": [],
+                "consensus_items": [],
+            }
+        )
+    )
+
+
 class AdvanceFixQueueTests(unittest.TestCase):
     def test_removes_resolved_and_resets_phase(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -87,6 +105,7 @@ class AdvanceCriticQueueTests(unittest.TestCase):
                 )
             )
             (root / ".review/progress.json").write_text(json.dumps({"phase": "debate"}))
+            _write_valid_debate_round(root)
             result = rg.advance_critic_queue(root, mark_resolved_ids=["sec"])
             self.assertTrue(result.get("deactivated"))
             config = json.loads((root / ".review/config.json").read_text())
@@ -115,6 +134,7 @@ class AdvanceCriticQueueTests(unittest.TestCase):
                 )
             )
             (root / ".review/progress.json").write_text(json.dumps({"phase": "debate"}))
+            _write_valid_debate_round(root)
             result = rg.advance_critic_queue(root, mark_resolved_ids=["sec"])
             self.assertEqual(result.get("deactivate_skipped"), "session_mismatch")
             config = json.loads((root / ".review/config.json").read_text())
@@ -284,6 +304,73 @@ class DebateValidationTests(unittest.TestCase):
         ok, msg = rg.validate_debate_report({"session_id": "s1"})
         self.assertFalse(ok)
         self.assertIn("claims", msg)
+
+    def test_require_nonempty_claims(self):
+        data = {
+            "session_id": "s1",
+            "round": 1,
+            "claims": [],
+            "counterclaims": [],
+            "evidence": [],
+            "unresolved": [],
+            "consensus_items": [],
+        }
+        ok, msg = rg.validate_debate_report(data, require_nonempty_claims=True)
+        self.assertFalse(ok)
+        self.assertIn("non-empty", msg)
+
+
+class HyperplanAcceptanceTests(unittest.TestCase):
+    def test_advance_rejects_without_debate_claims(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".review").mkdir()
+            (root / ".review/reports").mkdir()
+            (root / ".review/critic-queue.json").write_text(
+                json.dumps({"pending_items": [{"id": "sec", "desc": "d"}]})
+            )
+            (root / ".review/config.json").write_text(
+                json.dumps({"workflow": "map-hyperplan", "active": True})
+            )
+            (root / ".review/progress.json").write_text(json.dumps({"phase": "debate"}))
+            result = rg.advance_critic_queue(root, mark_resolved_ids=["sec"])
+            self.assertFalse(result["ok"])
+            self.assertIn("debate", result.get("reason", ""))
+
+    def test_advance_accepts_with_valid_debate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".review").mkdir()
+            (root / ".review/reports").mkdir()
+            (root / ".review/reports/debate-round-1.json").write_text(
+                json.dumps(
+                    {
+                        "session_id": "s1",
+                        "round": 1,
+                        "claims": [{"id": "c1", "text": "x", "author": "critic"}],
+                        "counterclaims": [],
+                        "evidence": [],
+                        "unresolved": [],
+                        "consensus_items": [],
+                    }
+                )
+            )
+            (root / ".review/critic-queue.json").write_text(
+                json.dumps({"pending_items": [{"id": "sec", "desc": "d"}]})
+            )
+            (root / ".review/config.json").write_text(
+                json.dumps({"workflow": "map-hyperplan", "active": True})
+            )
+            (root / ".review/progress.json").write_text(json.dumps({"phase": "debate"}))
+            result = rg.advance_critic_queue(root, mark_resolved_ids=["sec"])
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["phase"], "accepted")
+
+    def test_hyperplan_config_gate_hint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            hints = rg._routing_hints(root, None, "run map-hyperplan on this spec")
+            self.assertTrue(any("AskQuestion" in h for h in hints))
 
 
 class SecurityFingerprintTests(unittest.TestCase):

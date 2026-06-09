@@ -1396,6 +1396,22 @@ def advance_critic_queue(
         critic_queue["round"] = int(critic_queue.get("round") or 1) + 1
     critic_queue["updated_at"] = _now_iso()
 
+    config_path = _review_path(git_root, CONFIG_FILE)
+    config = _read_json_file(config_path) or {}
+
+    if not kept and str(config.get("workflow") or "") == "map-hyperplan":
+        debate_path = _latest_debate_report(git_root)
+        if debate_path is None:
+            return {"ok": False, "reason": "debate report missing for hyperplan acceptance"}
+        debate_data = _read_json_file(debate_path)
+        if debate_data is None:
+            return {"ok": False, "reason": "debate report unreadable"}
+        debate_ok, debate_msg = validate_debate_report(
+            debate_data, require_nonempty_claims=True
+        )
+        if not debate_ok:
+            return {"ok": False, "reason": f"debate report invalid: {debate_msg}"}
+
     if not kept:
         if critic_path.is_file():
             critic_path.unlink()
@@ -1496,7 +1512,21 @@ def routing_hints_from_rules(text: str, git_root: Path) -> list[str]:
     return [f"Routing tie: consider workflows {', '.join(workflows)} (AskQuestion to pick)."]
 
 
-def validate_debate_report(data: dict[str, Any]) -> tuple[bool, str]:
+def _latest_debate_report(git_root: Path) -> Path | None:
+    reports_dir = _review_path(git_root, "reports")
+    if not reports_dir.is_dir():
+        return None
+    candidates = sorted(
+        reports_dir.glob("debate-round-*.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
+
+
+def validate_debate_report(
+    data: dict[str, Any], *, require_nonempty_claims: bool = False
+) -> tuple[bool, str]:
     required_lists = ("claims", "counterclaims", "evidence", "unresolved", "consensus_items")
     for key in required_lists:
         value = data.get(key)
@@ -1505,6 +1535,8 @@ def validate_debate_report(data: dict[str, Any]) -> tuple[bool, str]:
     for scalar in ("round", "session_id"):
         if not data.get(scalar):
             return False, f"missing field: {scalar}"
+    if require_nonempty_claims and not data.get("claims"):
+        return False, "claims must be non-empty for hyperplan acceptance"
     return True, ""
 
 
@@ -1810,6 +1842,15 @@ def _routing_hints(
         hints.append("Open security-labeled GitHub issues; consider map-security.")
     if _count_todo_fixme_threshold(git_root, thresholds["todo_fixme_count"]):
         hints.append("High TODO/FIXME count; consider map-refactor.")
+    hyperplan_signals = re.search(
+        r"\b(hyperplan|map-hyperplan|写个 spec|架构|方案|debate)\b", user_text, re.I
+    )
+    if hyperplan_signals and not (config and config.get("active")):
+        hints.append(
+            "Hyperplan detected without active MAP session: run AskQuestion, "
+            "write .review/config.json (workflow=map-hyperplan, active=true), "
+            "phase=config-confirmed before spawning critics."
+        )
     hints.extend(routing_hints_from_rules(user_text, git_root))
     return hints
 
