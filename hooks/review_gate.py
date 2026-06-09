@@ -207,15 +207,24 @@ DANGEROUS_SHELL_PATTERN = re.compile(
     r"\b(rm\s+-rf|curl\s+|wget\s+|chmod\s+777|>\s*/dev/|mkfs\b|dd\s+if=)",
     re.I,
 )
+_SHELL_FD_REDIRECT = r"(?:\d{1,2})?>>?"
 SHELL_WRITE_PATTERN = re.compile(
-    r"(?:^|[;&|]\s*)(?:[^\n]*\s)?(?:>|>>)\s*(?!/dev/null\b)"
+    rf"(?:^|[;&|]\s*)(?:[^\n]*\s)?{_SHELL_FD_REDIRECT}\s*(?!/dev/null\b)"
     r"|\btee\s+(?:-a\s+)?(?!-)\S"
     r"|\bsponge\s+"
-    r"|\b(?:cat|python3?|node|ruby|perl)\b[^\n]*(?:>|>>)\s*"
+    rf"|\b(?:cat|python3?|node|ruby|perl)\b[^\n]*{_SHELL_FD_REDIRECT}\s*"
     r"|<<-?\s*['\"]?\w+['\"]?\s*$"
     r"|\b(?:sed|awk)\b[^\n]*\s-i\b"
     r"|\b(?:cp|mv|install|touch|mkdir)\s+",
     re.I | re.M,
+)
+_SHELL_OUTPUT_FLAG = re.compile(
+    r"(?:^|\s)(?:"
+    r"--(?:output(?:File)?|junitxml|log-file|result-log|coverprofile|basetemp)(?:=\S+|\s+\S+)"
+    r"|-coverprofile(?:=\S+|\s+\S+)"
+    r"|-o\s+\S+"
+    r")",
+    re.I,
 )
 SHELL_READONLY_PREFIXES = (
     re.compile(r"^\s*git\s+(diff|log|show|status|branch|rev-parse)\b", re.I),
@@ -946,16 +955,154 @@ def _shell_looks_readonly(command: str) -> bool:
     return any(pattern.search(command) for pattern in SHELL_READONLY_PREFIXES)
 
 
-def _shell_redirects_to_poc(command: str) -> bool:
-    return bool(re.search(r"(?:>|>>)\s*[^\s;|&]*\.review/poc/", command, re.I))
+def _validated_poc_sandbox(git_root: Path, config: dict[str, Any]) -> str:
+    """Repo-relative POSIX prefix (trailing slash) for a validated PoC sandbox."""
+    default = POC_DIR.rstrip("/") + "/"
+    raw = config.get("poc_sandbox", POC_DIR)
+    if not isinstance(raw, str) or not raw.strip():
+        return default
+    if ".." in raw.replace("\\", "/"):
+        return default
+
+    try:
+        root = git_root.resolve()
+        poc_base = (root / REVIEW_DIR / "poc").resolve()
+        normalized = raw.replace("\\", "/")
+        if normalized.startswith("/") or (len(normalized) > 1 and normalized[1] == ":"):
+            candidate = Path(normalized).resolve()
+        else:
+            candidate = (root / normalized).resolve()
+        candidate.relative_to(poc_base)
+        rel = candidate.relative_to(root)
+    except (OSError, ValueError):
+        return default
+
+    posix = str(rel).replace("\\", "/")
+    return posix.rstrip("/") + "/"
 
 
-def _shell_write_blocked(command: str, logical_role: str) -> bool:
+_SHELL_REDIRECT_TARGET = re.compile(rf"{_SHELL_FD_REDIRECT}\s*([^\s;|&]+)")
+
+
+def _shell_redirect_target_unsafe(target: str) -> bool:
+    if not target:
+        return True
+    if re.search(r"[\$`]", target):
+        return True
+    if ".." in target.replace("\\", "/"):
+        return True
+    if target.count('"') % 2 != 0 or target.count("'") % 2 != 0:
+        return True
+    return False
+
+
+def _shell_redirects_to_poc(
+    command: str, git_root: Path, config: dict[str, Any]
+) -> bool:
+    """True only when every redirect in command targets the validated PoC sandbox."""
+    sandbox = _validated_poc_sandbox(git_root, config)
+    root = git_root.resolve()
+    sandbox_path = (root / sandbox.rstrip("/")).resolve()
+    found = False
+    for match in _SHELL_REDIRECT_TARGET.finditer(command):
+        raw_target = match.group(1).strip()
+        if _shell_redirect_target_unsafe(raw_target):
+            return False
+        target = raw_target.strip('"').strip("'")
+        try:
+            if target.startswith("/") or (len(target) > 1 and target[1] == ":"):
+                candidate = Path(target).resolve()
+            else:
+                candidate = (root / target).resolve()
+            candidate.relative_to(sandbox_path)
+            found = True
+        except (OSError, ValueError):
+            return False
+    return found
+
+
+def _strip_shell_redirects(command: str) -> str:
+    return _SHELL_REDIRECT_TARGET.sub("", command)
+
+
+_POC_SHELL_REDIRECT_ALLOWED = re.compile(r"^\s*(?:echo|printf)\b", re.I)
+
+
+def _poc_redirect_remainder_allowed(remainder: str) -> bool:
+    """Only echo/printf may precede a PoC sandbox redirect (fail-closed)."""
+    if not remainder.strip():
+        return False
+    if SHELL_WRITE_PATTERN.search(remainder):
+        return False
+    if re.search(r"(?<!<)<(?!<)", remainder):
+        return False
+    return bool(_POC_SHELL_REDIRECT_ALLOWED.match(remainder))
+
+
+def _poc_shell_has_expansion(command: str) -> bool:
+    if re.search(r"\$\(", command):
+        return True
+    if "`" in command:
+        return True
+    if re.search(r"<\(", command):
+        return True
+    return False
+
+
+def _poc_shell_redirect_only(
+    command: str, git_root: Path, config: dict[str, Any]
+) -> bool:
+    """True only when PoC writes use redirects alone (no cp/mv/tee/heredoc/etc.)."""
+    if _SHELL_COMPOUND_SEP.search(command):
+        return False
+    if not _shell_redirects_to_poc(command, git_root, config):
+        return False
+    if _poc_shell_has_expansion(command):
+        return False
+    remainder = _strip_shell_redirects(command)
+    if not _poc_redirect_remainder_allowed(remainder):
+        return False
+    return True
+
+
+_SHELL_COMPOUND_SEP = re.compile(
+    r"(?:;|&&|\|\||(?<!\|)\|(?!\|)|(?<!&)&(?!&)|\n)"
+)
+
+
+def _shell_has_output_flag(command: str) -> bool:
+    return bool(_SHELL_OUTPUT_FLAG.search(command))
+
+
+def _shell_readonly_safe(command: str) -> bool:
+    return (
+        _shell_looks_readonly(command)
+        and not SHELL_WRITE_PATTERN.search(command)
+        and not _shell_has_output_flag(command)
+        and not _SHELL_COMPOUND_SEP.search(command)
+        and not _poc_shell_has_expansion(command)
+    )
+
+
+def _shell_write_blocked(
+    command: str,
+    logical_role: str,
+    *,
+    git_root: Path | None = None,
+    config: dict[str, Any] | None = None,
+) -> bool:
     if not command.strip() or _shell_looks_readonly(command):
         return False
-    if logical_role == "poc-exploit" and _shell_redirects_to_poc(command):
+    if not SHELL_WRITE_PATTERN.search(command):
         return False
-    return bool(SHELL_WRITE_PATTERN.search(command))
+    root = git_root or Path.cwd()
+    cfg = config if config is not None else {}
+    if logical_role == "poc-exploit":
+        if _SHELL_COMPOUND_SEP.search(command):
+            return True
+        if _poc_shell_redirect_only(command, root, cfg):
+            return False
+    return True
 
 
 def _code_outside_allowed(
@@ -966,7 +1113,7 @@ def _code_outside_allowed(
 
 def _security_code_modified(git_root: Path, config: dict[str, Any]) -> bool:
     changed = _git_diff_files(str(git_root))
-    sandbox = str(config.get("poc_sandbox", POC_DIR)).rstrip("/") + "/"
+    sandbox = _validated_poc_sandbox(git_root, config)
     poc_prefixes = (sandbox, ".review/poc/", ".review/reports/")
     scope_paths = config.get("scope_paths") or []
 
@@ -1396,6 +1543,7 @@ def advance_critic_queue(
             continue
         kept.append(item)
     critic_queue["pending_items"] = kept
+    queue_round = critic_queue.get("round")
     if increment_round:
         critic_queue["round"] = int(critic_queue.get("round") or 1) + 1
     critic_queue["updated_at"] = _now_iso()
@@ -1404,7 +1552,11 @@ def advance_critic_queue(
     config = _read_json_file(config_path) or {}
 
     if not kept and str(config.get("workflow") or "") == "map-hyperplan":
-        debate_path = _latest_debate_report(git_root)
+        try:
+            debate_round = int(queue_round) if queue_round is not None else None
+        except (TypeError, ValueError):
+            return {"ok": False, "reason": "invalid critic queue round"}
+        debate_path = _latest_debate_report(git_root, debate_round)
         if debate_path is None:
             return {"ok": False, "reason": "debate report missing for hyperplan acceptance"}
         debate_data = _read_json_file(debate_path)
@@ -1516,10 +1668,13 @@ def routing_hints_from_rules(text: str, git_root: Path) -> list[str]:
     return [f"Routing tie: consider workflows {', '.join(workflows)} (AskQuestion to pick)."]
 
 
-def _latest_debate_report(git_root: Path) -> Path | None:
+def _latest_debate_report(git_root: Path, round: int | None = None) -> Path | None:
     reports_dir = _review_path(git_root, "reports")
     if not reports_dir.is_dir():
         return None
+    if round is not None:
+        preferred = reports_dir / f"debate-round-{round}.json"
+        return preferred if preferred.is_file() else None
     candidates = sorted(
         reports_dir.glob("debate-round-*.json"),
         key=lambda p: p.stat().st_mtime,
@@ -2047,22 +2202,37 @@ def check_tool_permission_from_hook(data: dict[str, Any]) -> dict[str, Any]:
     command = _extract_command(data)
     role, role_data = _role_for_permission(ctx, data)
     workflow = str(config.get("workflow") or "multi-agent-pr")
+    git_root = ctx["git_root"]
 
     if tool_name == "Shell":
-        restricted_shell_roles = {
+        if role == "poc-exploit":
+            if DANGEROUS_SHELL_PATTERN.search(command):
+                return {
+                    "permission": "deny",
+                    "user_message": "Dangerous shell command blocked for security hunter/PoC role.",
+                    "agent_message": "BLOCKED: use .review/poc/ sandbox only.",
+                }
+            if not (
+                _poc_shell_redirect_only(command, git_root, config)
+                or _shell_readonly_safe(command)
+            ):
+                return {
+                    "permission": "deny",
+                    "user_message": "PoC shell limited to read-only commands or echo/printf redirects into .review/poc/.",
+                    "agent_message": "BLOCKED: poc-exploit shell allowlist.",
+                }
+        elif role.startswith("reviewer-") or role in {
             "explore",
-            "poc-exploit",
             "planner",
             "generalPurpose",
-        }
-        if role.startswith("reviewer-") or role in restricted_shell_roles:
-            if _shell_write_blocked(command, role):
+        }:
+            if not _shell_readonly_safe(command):
                 return {
                     "permission": "deny",
                     "user_message": "Shell file-write pattern blocked for read-only MAP role.",
                     "agent_message": "BLOCKED: use allowed Write tool paths instead of shell redirects.",
                 }
-        if role in {"poc-exploit", "explore"} and DANGEROUS_SHELL_PATTERN.search(command):
+        if role == "explore" and DANGEROUS_SHELL_PATTERN.search(command):
             return {
                 "permission": "deny",
                 "user_message": "Dangerous shell command blocked for security hunter/PoC role.",
@@ -2073,7 +2243,6 @@ def check_tool_permission_from_hook(data: dict[str, Any]) -> dict[str, Any]:
         return {"permission": "allow"}
 
     norm_path = path.replace("\\", "/")
-    git_root = ctx["git_root"]
 
     if role.startswith("reviewer-"):
         return {
@@ -2121,7 +2290,7 @@ def check_tool_permission_from_hook(data: dict[str, Any]) -> dict[str, Any]:
             }
 
     if role == "poc-exploit" or (role == "coder" and workflow == "map-security"):
-        sandbox = str(config.get("poc_sandbox", POC_DIR)).rstrip("/") + "/"
+        sandbox = _validated_poc_sandbox(git_root, config)
         if role == "poc-exploit" and not _path_allowed(norm_path, [sandbox, ".review/poc/"], git_root):
             return {
                 "permission": "deny",

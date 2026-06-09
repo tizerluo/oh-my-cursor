@@ -105,6 +105,26 @@ class SecretTrustTests(unittest.TestCase):
                     self.assertEqual(ctx.exception.code, 2)
             self.assertFalse(secret.is_file())
 
+    def test_marker_seal_with_extra_keys_round_trip(self):
+        rg = load_review_gate()
+        with tempfile.TemporaryDirectory() as tmp:
+            secret = Path(tmp) / "secret"
+            rg.bootstrap_secret(secret)
+            os.environ["OMC_SECRET_FILE"] = str(secret)
+            data = {"type": "coder", "subagent_id": "abc", "ok": True, "meta": {"trace": "x"}}
+            sealed = rg._seal_marker(data)
+            self.assertTrue(rg._valid_marker_seal(sealed))
+
+    def test_marker_seal_extra_keys_change_digest(self):
+        rg = load_review_gate()
+        with tempfile.TemporaryDirectory() as tmp:
+            secret = Path(tmp) / "secret"
+            rg.bootstrap_secret(secret)
+            os.environ["OMC_SECRET_FILE"] = str(secret)
+            a = rg._seal_marker({"type": "coder", "ok": True})
+            b = rg._seal_marker({"type": "coder", "ok": True, "extra": 1})
+            self.assertNotEqual(a["seal"], b["seal"])
+
 
 if __name__ == "__main__":
     unittest.main()
