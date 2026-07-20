@@ -72,6 +72,20 @@
         "command": "python3 {{REVIEW_GATE_QUOTED_PATH}} session-resume",
         "omc": true
       }
+    ],
+    "preCompact": [
+      {
+        "command": "python3 {{REVIEW_GATE_QUOTED_PATH}} compact-inject",
+        "failClosed": false,
+        "omc": true
+      }
+    ],
+    "beforeMCPExecution": [
+      {
+        "command": "python3 {{REVIEW_GATE_QUOTED_PATH}} check-mcp-permission",
+        "failClosed": false,
+        "omc": true
+      }
     ]
   }
 }

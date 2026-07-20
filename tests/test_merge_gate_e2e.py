@@ -417,7 +417,7 @@ class ReviewerLogicalRoleMergeGateTests(unittest.TestCase):
         sess = review / "session" / self.branch / self.head
         sess.mkdir(parents=True)
         for subagent_type, model in (
-            ("reviewer-grok", "grok-build-0.1"),
+            ("reviewer-grok", "grok-4.5"),
             ("reviewer-codex", "gpt-5.3-codex-high-fast"),
             ("reviewer-gemini", "gemini-3.1-pro"),
         ):

@@ -1,19 +1,19 @@
 # Model Reference
 
-Available model slugs for subagent roles (as of 2026-06):
+Available model slugs for subagent roles (as of 2026-07):
 
 | Family | Slug | Typical Role |
 |--------|------|--------------|
-| Claude Opus 4.6 | `claude-4.6-opus-high-thinking` | Commander (parent) |
 | Claude Opus 4.8 | `claude-opus-4-8-thinking-high` | Commander (parent) |
-| Claude Sonnet | `claude-4.6-sonnet-medium-thinking` | Lighter Commander |
-| Composer | `composer-2.5-fast` | Coder |
-| GPT 5.5 | `gpt-5.5-medium` | Architect |
-| Codex 5.3 | `gpt-5.3-codex-high-fast` | Reviewer (quality) |
-| Grok Build | `grok-build-0.1` | Reviewer (correctness) |
-| Gemini 3.1 Pro | `gemini-3.1-pro` | Reviewer (architecture) |
-| Kimi K2.5 | `kimi-k2.5` | Tester-Writer |
 | Claude Opus 4.7 | `claude-opus-4-7-thinking-xhigh` | Heavy reasoning |
+| Claude Opus 4.6 | `claude-opus-4-6-thinking-high` | Commander (alt) |
+| Claude Sonnet 4.6 | `claude-4-6-sonnet-medium-thinking` | Lighter Commander |
+| Composer 2.5 | `composer-2.5-fast` | Coder |
+| GPT 5.5 | `gpt-5.5-medium` | Architect |
+| GPT 5.3 Codex | `gpt-5.3-codex-high-fast` | Reviewer (quality) |
+| Grok 4.5 | `grok-4.5` | Reviewer (correctness) |
+| Gemini 3.1 Pro | `gemini-3.1-pro` | Reviewer (architecture) |
+| Kimi K2.7 Code | `kimi-k2.7-code` | Tester-Writer |
 
 ## Subagent Types
 
@@ -34,12 +34,12 @@ Cursor Task accepts **platform** subagent types only. MAP **logical roles** (mer
 
 | MAP logical role | Platform `subagent_type` | `readonly` | Typical model |
 |------------------|--------------------------|------------|---------------|
-| `reviewer-grok` | `generalPurpose` | `true` | `grok-build-0.1` |
+| `reviewer-grok` | `generalPurpose` | `true` | `grok-4.5` |
 | `reviewer-codex` | `generalPurpose` | `true` | `gpt-5.3-codex-high-fast` |
 | `reviewer-gemini` | `generalPurpose` | `true` | `gemini-3.1-pro` |
 | `coder` | `coder` | — | `composer-2.5-fast` |
 | `architect` | `architect` | — | `gpt-5.5-medium` |
-| `tester-writer` | `tester-writer` | — | `kimi-k2.5` |
+| `tester-writer` | `tester-writer` | — | `kimi-k2.7-code` |
 | `explore` | `explore` | — | (varies) |
 
 Prompt must include `logical_role: reviewer-<engine>` (or `Reviewer-Grok` / etc.) so hooks infer the logical role at `subagentStart` and record `reviewer-*` markers at `subagentStop`.

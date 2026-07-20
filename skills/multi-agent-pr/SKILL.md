@@ -19,8 +19,8 @@ Commander-driven development pipeline with Architect gate, Coder implementation,
 | Commander | parent agent | — | Spec, adjudicate, merge |
 | Architect | `gpt-5.5-medium` | `architect` | Spec review → P0/P1/P2 |
 | Coder | `composer-2.5-fast` | `coder` | Implement + unit tests + commit |
-| Tester | `kimi-k2.5` | `tester-writer` | Integration tests, boundary tests, contract validation |
-| Reviewer-Grok | `grok-build-0.1` | `reviewer-grok` | Correctness, boundaries, concurrency |
+| Tester | `kimi-k2.7-code` | `tester-writer` | Integration tests, boundary tests, contract validation |
+| Reviewer-Grok | `grok-4.5` | `reviewer-grok` | Correctness, boundaries, concurrency |
 | Reviewer-Codex | `gpt-5.3-codex-high-fast` | `reviewer-codex` | Quality, DRY, naming, patterns |
 | Reviewer-Gemini | `gemini-3.1-pro` | `reviewer-gemini` | Architecture consistency, config propagation |
 
@@ -151,7 +151,7 @@ Read-only shell (`git diff`, `pytest`, `rtk grep`) is allowed.
   "head_sha": "abc123def456",
   "tree_sha": "tree123optional",
   "tier": "hotfix",
-  "reviewers": ["grok-build-0.1"],
+  "reviewers": ["grok-4.5"],
   "verdict": "pass",
   "p0": 0,
   "p1": 0,
@@ -249,7 +249,7 @@ with `phase: config-confirmed`.
   "head_sha": "<current HEAD>",
   "tier": "standard",
   "roles": ["reviewer-grok", "reviewer-codex", "reviewer-gemini"],
-  "models": ["grok-build-0.1", "gpt-5.3-codex-high-fast", "gemini-3.1-pro"],
+  "models": ["grok-4.5", "gpt-5.3-codex-high-fast", "gemini-3.1-pro"],
   "max_rounds": 2,
   "skip_architect": false,
   "skip_tester": false,
@@ -418,7 +418,7 @@ Coder 写的测试容易有"实现者盲区"（倾向 happy path、过度 mock �
 Launch background subagent:
 
 ```
-Task(subagent_type="tester-writer", model="kimi-k2.5", run_in_background=true)
+Task(subagent_type="tester-writer", model="kimi-k2.7-code", run_in_background=true)
 ```
 
 Prompt must include:
@@ -451,7 +451,7 @@ Cursor Task only accepts platform subagent types (`generalPurpose`, `coder`, etc
 
 | MAP logical role | Platform `subagent_type` | `readonly` | Model (seat) |
 |------------------|--------------------------|------------|--------------|
-| `reviewer-grok` | `generalPurpose` | `true` | `grok-build-0.1` |
+| `reviewer-grok` | `generalPurpose` | `true` | `grok-4.5` |
 | `reviewer-codex` | `generalPurpose` | `true` | `gpt-5.3-codex-high-fast` |
 | `reviewer-gemini` | `generalPurpose` | `true` | `gemini-3.1-pro` |
 
@@ -460,14 +460,14 @@ Each reviewer prompt must include `logical_role: reviewer-<engine>` (or `Reviewe
 Hotfix review path (one reviewer):
 
 ```
-Task(subagent_type="generalPurpose", model="grok-build-0.1", readonly=true,
+Task(subagent_type="generalPurpose", model="grok-4.5", readonly=true,
      prompt="You are MAP Reviewer-Grok. logical_role: reviewer-grok\n...")
 ```
 
 Standard/Large review path — launch **three subagents in parallel** in one message:
 
 ```
-Task(subagent_type="generalPurpose", model="grok-build-0.1",         readonly=true, prompt="... logical_role: reviewer-grok\n...")
+Task(subagent_type="generalPurpose", model="grok-4.5",         readonly=true, prompt="... logical_role: reviewer-grok\n...")
 Task(subagent_type="generalPurpose", model="gpt-5.3-codex-high-fast", readonly=true, prompt="... logical_role: reviewer-codex\n...")
 Task(subagent_type="generalPurpose", model="gemini-3.1-pro",          readonly=true, prompt="... logical_role: reviewer-gemini\n...")
 ```

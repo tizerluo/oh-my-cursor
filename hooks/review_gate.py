@@ -35,6 +35,7 @@ SECURITY_QUEUE_FILE = "security-queue.json"
 ROLES_DIR = "roles"
 ROUTING_RULES_FILE = "routing-rules.json"
 HOOKS_DIR = Path(__file__).resolve().parent
+MODELS_CONFIG_FILE = HOOKS_DIR / "config" / "models.json"
 LEGACY_SECRET_FILE = Path.home() / ".cursor" / "hooks" / ".review-gate-secret"
 SPECS_DIR = ".specs"
 
@@ -348,6 +349,111 @@ WORKFLOW_STOP_PHASES: dict[str, str | None] = {
     "map-security": "report",
 }
 
+VALID_TRANSITIONS: dict[str, dict[str, list[str]]] = {
+    "multi-agent-pr": {
+        "config-confirmed": ["spec-writing"],
+        "spec-writing": ["architect-review"],
+        "architect-review": ["adjudication"],
+        "adjudication": ["coding"],
+        "coding": ["testing"],
+        "testing": ["review-pending"],
+        "review-pending": ["synthesis-complete"],
+        "synthesis-complete": ["fix-round-*", "merge-ready"],
+        "fix-round-*": ["synthesis-complete"],
+        "merge-ready": ["merged", "cleanup"],
+    },
+    "map-hyperplan": {
+        "config-confirmed": ["draft"],
+        "draft": ["critics"],
+        "critics": ["debate"],
+        "debate": ["revise", "accepted"],
+        "revise": ["debate", "accepted"],
+    },
+    "map-security": {
+        "config-confirmed": ["scope"],
+        "scope": ["hunt"],
+        "hunt": ["triage"],
+        "triage": ["poc"],
+        "poc": ["report"],
+    },
+    "map-refactor": {
+        "config-confirmed": ["analysis"],
+        "analysis": ["baseline"],
+        "baseline": ["implement"],
+        "implement": ["regression"],
+        "regression": ["review-pending", "fix-round-*"],
+        "fix-round-*": ["regression"],
+        "review-pending": ["synthesis-complete"],
+        "synthesis-complete": ["merge-ready", "fix-round-*"],
+    },
+}
+
+
+class PhaseTransitionError(Exception):
+    def __init__(self, workflow: str, current: str, target: str) -> None:
+        self.workflow = workflow
+        self.current = current
+        self.target = target
+        super().__init__(
+            f"invalid phase transition: {current!r} -> {target!r} "
+            f"in workflow {workflow!r}"
+        )
+
+
+def validate_phase_transition(workflow: str, current: str, target: str) -> bool:
+    """Check if a phase transition is allowed. Returns True if valid."""
+    transitions = VALID_TRANSITIONS.get(workflow, {})
+    allowed = transitions.get(current, [])
+    if not allowed:
+        return True
+    return any(fnmatch.fnmatch(target, p) for p in allowed)
+
+
+def safe_transition_phase(
+    git_root: Path,
+    workflow: str,
+    target_phase: str,
+    *,
+    force: bool = False,
+) -> bool:
+    """Validate and set phase in progress.json. Returns True if transitioned."""
+    progress_path = _review_path(git_root, PROGRESS_FILE)
+    progress = _read_json_file(progress_path) or {}
+    current = str(progress.get("phase") or "")
+    if not force and current and not validate_phase_transition(workflow, current, target_phase):
+        raise PhaseTransitionError(workflow, current, target_phase)
+    progress["phase"] = target_phase
+    progress["updated_at"] = _now_iso()
+    _write_json_file(progress_path, progress)
+    return True
+
+
+def repair_phase_state(
+    git_root: Path,
+    workflow: str,
+    progress: dict[str, Any],
+    markers: list[dict[str, Any]],
+) -> str | None:
+    """Detect inconsistent phase state and suggest repair. Returns new phase or None."""
+    current = str(progress.get("phase") or "")
+    completed = _completed_types(markers, ALL_RECORDED_TYPES)
+
+    if workflow == "multi-agent-pr":
+        if current == "coding" and "coder" in completed:
+            return "testing"
+        if current == "testing" and "tester-writer" in completed:
+            return "review-pending"
+        if current == "review-pending" and REVIEWER_TYPES.issubset(completed):
+            return "synthesis-complete"
+
+    elif workflow == "map-refactor":
+        if current == "implement" and "coder" in completed:
+            return "regression"
+        if current == "regression" and "tester-writer" in completed:
+            return "review-pending"
+
+    return None
+
 ROUTING_RULES_FALLBACK = (
     HOOKS_DIR.parent / "skills" / "multi-agent-pr" / "routing-rules.example.json"
 )
@@ -527,44 +633,20 @@ def _event_looks_like_subagent_stop(data: dict[str, Any]) -> bool:
 
 
 def _git_root(cwd: str) -> Path | None:
-    try:
-        result = _run_subprocess(["git", "-C", cwd, "rev-parse", "--show-toplevel"])
-        if result.returncode != 0:
-            return None
-        root = result.stdout.strip()
-        return Path(root) if root else None
-    except OSError:
-        return None
+    root = _git_cached(["git", "-C", cwd, "rev-parse", "--show-toplevel"])
+    return Path(root) if root else None
 
 
 def _git_branch(cwd: str) -> str:
-    try:
-        result = _run_subprocess(["git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"])
-        if result.returncode != 0:
-            return ""
-        return result.stdout.strip()
-    except OSError:
-        return ""
+    return _git_cached(["git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"])
 
 
 def _git_head(cwd: str) -> str:
-    try:
-        result = _run_subprocess(["git", "-C", cwd, "rev-parse", "HEAD"])
-        if result.returncode != 0:
-            return ""
-        return result.stdout.strip()
-    except OSError:
-        return ""
+    return _git_cached(["git", "-C", cwd, "rev-parse", "HEAD"])
 
 
 def _git_tree(cwd: str) -> str:
-    try:
-        result = _run_subprocess(["git", "-C", cwd, "rev-parse", "HEAD^{tree}"])
-        if result.returncode != 0:
-            return ""
-        return result.stdout.strip()
-    except OSError:
-        return ""
+    return _git_cached(["git", "-C", cwd, "rev-parse", "HEAD^{tree}"])
 
 
 def _git_diff_files(cwd: str) -> list[str]:
@@ -1151,7 +1233,7 @@ def _validate_config_cross_check(
         return (
             False,
             f"Config tier {config_tier} below enforced minimum {minimum_tier}.",
-            f"BLOCKED: config tier mismatch with diff inference.",
+            "BLOCKED: config tier mismatch with diff inference.",
         )
     if _tier_rank(verdict_tier) < _tier_rank(config_tier):
         return (
@@ -1314,7 +1396,7 @@ def validate_review_state(
         return (
             False,
             "Review verdict tree mismatch.",
-            f"BLOCKED: verdict tree_sha mismatch.",
+            "BLOCKED: verdict tree_sha mismatch.",
         )
 
     tier = str(verdict.get("tier") or "standard").lower()
@@ -1348,7 +1430,7 @@ def validate_review_state(
             return (
                 False,
                 f"Missing required reviewer subagents: {', '.join(missing)}.",
-                f"BLOCKED: Standard/Large requires all three reviewers.",
+                "BLOCKED: Standard/Large requires all three reviewers.",
             )
 
     completed_implementers = _completed_types(markers, IMPLEMENTER_TYPES)
@@ -1435,6 +1517,189 @@ def check_merge_from_hook(data: dict[str, Any]) -> dict[str, Any]:
     return {"permission": "deny", "user_message": user_message, "agent_message": agent_message}
 
 
+class QueueManager:
+    """Unified queue interface for fix, critic, and security queues."""
+
+    def __init__(self, git_root: Path, queue_file: str) -> None:
+        self._path = _review_path(git_root, queue_file)
+        self._git_root = git_root
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    def load(self) -> dict[str, Any] | None:
+        return _read_json_file(self._path)
+
+    def save(self, data: dict[str, Any]) -> None:
+        data["updated_at"] = _now_iso()
+        _write_json_file(self._path, data)
+
+    def is_empty(self) -> bool:
+        data = self.load()
+        if data is None:
+            return True
+        return not any(self._item_keys_values(data))
+
+    def delete(self) -> None:
+        if self._path.is_file():
+            self._path.unlink()
+
+    def _item_keys_values(self, data: dict[str, Any]) -> list[list[dict[str, Any]]]:
+        raise NotImplementedError
+
+    def _item_count(self, data: dict[str, Any]) -> int:
+        return sum(len(v) for v in self._item_keys_values(data))
+
+
+class FixQueue(QueueManager):
+    """Fix queue: tracks P0/P1 issues across fix-review rounds."""
+
+    def __init__(self, git_root: Path) -> None:
+        super().__init__(git_root, FIX_QUEUE_FILE)
+
+    def _item_keys_values(self, data: dict[str, Any]) -> list[list[dict[str, Any]]]:
+        return [_issue_list(data, "p0_issues"), _issue_list(data, "p1_issues")]
+
+    def p0_count(self) -> int:
+        data = self.load()
+        if not data:
+            return 0
+        return len(_issue_list(data, "p0_issues"))
+
+    def p1_count(self) -> int:
+        data = self.load()
+        if not data:
+            return 0
+        return len(_issue_list(data, "p1_issues"))
+
+    def total_count(self) -> int:
+        return self.p0_count() + self.p1_count()
+
+    def resolve_ids(self, resolved_ids: set[str]) -> None:
+        data = self.load()
+        if data is None:
+            return
+        data["p0_issues"] = _filter_resolved_issues(_issue_list(data, "p0_issues"), resolved_ids)
+        data["p1_issues"] = _filter_resolved_issues(_issue_list(data, "p1_issues"), resolved_ids)
+        if not data["p0_issues"] and not data["p1_issues"]:
+            self.delete()
+        else:
+            self.save(data)
+
+    def increment_round(self) -> int:
+        data = self.load() or {}
+        new_round = int(data.get("round") or 0) + 1
+        data["round"] = new_round
+        self.save(data)
+        return new_round
+
+    def scope_check(self, branch: str, head_sha: str) -> bool:
+        data = self.load()
+        if not data:
+            return False
+        return data.get("branch") == branch and data.get("head_sha") == head_sha
+
+
+class CriticQueue(QueueManager):
+    """Critic queue: tracks pending critic items for hyperplan debate."""
+
+    def __init__(self, git_root: Path) -> None:
+        super().__init__(git_root, CRITIC_QUEUE_FILE)
+
+    def _item_keys_values(self, data: dict[str, Any]) -> list[list[dict[str, Any]]]:
+        items = data.get("pending_items") or []
+        return [items] if isinstance(items, list) else []
+
+    def pending_count(self) -> int:
+        data = self.load()
+        if not data:
+            return 0
+        items = data.get("pending_items") or []
+        return len(items) if isinstance(items, list) else 0
+
+    def resolve_ids(self, resolved_ids: set[str]) -> None:
+        data = self.load()
+        if data is None:
+            return
+        pending = data.get("pending_items") or []
+        if not isinstance(pending, list):
+            pending = []
+        kept = []
+        for item in pending:
+            if not isinstance(item, dict):
+                continue
+            item_id = str(item.get("id") or item.get("dimension") or "")
+            if item_id and item_id in resolved_ids:
+                continue
+            kept.append(item)
+        data["pending_items"] = kept
+        if not kept:
+            self.delete()
+        else:
+            self.save(data)
+
+    def increment_round(self) -> int:
+        data = self.load() or {}
+        new_round = int(data.get("round") or 1) + 1
+        data["round"] = new_round
+        self.save(data)
+        return new_round
+
+
+class SecurityQueue(QueueManager):
+    """Security queue: tracks unverified High+ findings with fingerprint dedup."""
+
+    def __init__(self, git_root: Path) -> None:
+        super().__init__(git_root, SECURITY_QUEUE_FILE)
+
+    def _item_keys_values(self, data: dict[str, Any]) -> list[list[dict[str, Any]]]:
+        items = data.get("pending_findings") or []
+        return [items] if isinstance(items, list) else []
+
+    def pending_count(self) -> int:
+        data = self.load()
+        if not data:
+            return 0
+        items = data.get("pending_findings") or []
+        return len(items) if isinstance(items, list) else 0
+
+    def existing_fingerprints(self) -> set[str]:
+        data = self.load()
+        if not data:
+            return set()
+        items = data.get("pending_findings") or []
+        return {item.get("fingerprint") for item in items if isinstance(item, dict)}
+
+    def append_findings(self, findings: list[dict[str, Any]], *, session_id: str) -> int:
+        data = self.load() or {
+            "schema_version": 1,
+            "session_id": session_id,
+            "pending_findings": [],
+        }
+        pending = data.get("pending_findings") or []
+        if not isinstance(pending, list):
+            pending = []
+        existing = {item.get("fingerprint") for item in pending if isinstance(item, dict)}
+        added = 0
+        for finding in findings:
+            if not isinstance(finding, dict):
+                continue
+            severity = str(finding.get("severity") or "").lower()
+            verified = finding.get("verified") is True
+            if verified or severity not in {"high", "critical", "p0", "p1"}:
+                continue
+            fp = security_fingerprint(finding)
+            if fp in existing:
+                continue
+            pending.append({**finding, "fingerprint": fp, "verified": False})
+            existing.add(fp)
+            added += 1
+        data["pending_findings"] = pending
+        self.save(data)
+        return added
+
+
 def _issue_list(fix_queue: dict[str, Any], key: str) -> list[dict[str, Any]]:
     items = fix_queue.get(key) or []
     if not isinstance(items, list):
@@ -1494,7 +1759,16 @@ def advance_fix_queue(
 
     progress_path = _review_path(git_root, PROGRESS_FILE)
     progress = _read_json_file(progress_path) or {}
-    progress["phase"] = "synthesis-complete"
+    config_path = _review_path(git_root, CONFIG_FILE)
+    config = _read_json_file(config_path) or {}
+    workflow = str(config.get("workflow") or "multi-agent-pr")
+    try:
+        safe_transition_phase(git_root, workflow, "synthesis-complete")
+    except PhaseTransitionError:
+        progress["phase"] = "synthesis-complete"
+        progress["updated_at"] = _now_iso()
+        _write_json_file(progress_path, progress)
+    progress = _read_json_file(progress_path) or {}
     if head_sha:
         progress["head_sha"] = head_sha
     if branch:
@@ -1578,12 +1852,14 @@ def advance_critic_queue(
 
     progress_path = _review_path(git_root, PROGRESS_FILE)
     progress = _read_json_file(progress_path) or {}
-    if kept:
-        progress["phase"] = "revise"
-    else:
-        progress["phase"] = "accepted"
-    progress["updated_at"] = _now_iso()
-    _write_json_file(progress_path, progress)
+    target_phase = "revise" if kept else "accepted"
+    try:
+        safe_transition_phase(git_root, "map-hyperplan", target_phase)
+    except PhaseTransitionError:
+        progress["phase"] = target_phase
+        progress["updated_at"] = _now_iso()
+        _write_json_file(progress_path, progress)
+    progress = _read_json_file(progress_path) or {}
 
     result: dict[str, Any] = {
         "ok": True,
@@ -2002,7 +2278,7 @@ def _routing_hints(
     if _count_todo_fixme_threshold(git_root, thresholds["todo_fixme_count"]):
         hints.append("High TODO/FIXME count; consider map-refactor.")
     hyperplan_signals = re.search(
-        r"\b(hyperplan|map-hyperplan|写个 spec|架构|方案|debate)\b", user_text, re.I
+        r"(hyperplan|map-hyperplan|写个\s*spec|架构|方案|debate)", user_text, re.I
     )
     if hyperplan_signals and not (config and config.get("active")):
         hints.append(
@@ -2041,17 +2317,55 @@ def session_resume_from_hook(data: dict[str, Any]) -> dict[str, Any]:
     return {"additional_context": "\n".join(parts)}
 
 
-_REVIEWER_MODEL_MAP: dict[str, str] = {
-    "grok-build-0.1": "reviewer-grok",
-    "gpt-5.3-codex-high-fast": "reviewer-codex",
-    "gemini-3.1-pro": "reviewer-gemini",
-}
-
-_REVIEWER_SPAWN_MODELS: dict[str, str] = {
-    "reviewer-grok": "grok-build-0.1",
+_FALLBACK_REVIEWERS: dict[str, str] = {
+    "reviewer-grok": "grok-4.5",
     "reviewer-codex": "gpt-5.3-codex-high-fast",
     "reviewer-gemini": "gemini-3.1-pro",
 }
+
+_models_cache: dict[str, Any] | None = None
+
+
+def _load_models_config() -> dict[str, Any]:
+    global _models_cache
+    if _models_cache is not None:
+        return _models_cache
+    try:
+        with open(MODELS_CONFIG_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        _models_cache = data
+    except (OSError, json.JSONDecodeError):
+        _models_cache = {"reviewers": {k: {"model": v} for k, v in _FALLBACK_REVIEWERS.items()}, "roles": {}}
+    return _models_cache
+
+
+def _reset_models_cache() -> None:
+    global _models_cache
+    _models_cache = None
+
+
+def _build_reviewer_model_map() -> dict[str, str]:
+    cfg = _load_models_config()
+    result: dict[str, str] = {}
+    for role, info in cfg.get("reviewers", {}).items():
+        model = info.get("model", "") if isinstance(info, dict) else ""
+        if model:
+            result[model] = role
+    if not result:
+        result = {v: k for k, v in _FALLBACK_REVIEWERS.items()}
+    return result
+
+
+def _build_reviewer_spawn_models() -> dict[str, str]:
+    cfg = _load_models_config()
+    result: dict[str, str] = {}
+    for role, info in cfg.get("reviewers", {}).items():
+        model = info.get("model", "") if isinstance(info, dict) else ""
+        if model:
+            result[role] = model
+    if not result:
+        result = dict(_FALLBACK_REVIEWERS)
+    return result
 
 
 def _infer_reviewer_logical_role(model: str, prompt: str) -> str | None:
@@ -2063,8 +2377,8 @@ def _infer_reviewer_logical_role(model: str, prompt: str) -> str | None:
     match = re.search(r"Reviewer-(Grok|Codex|Gemini)", text, re.I)
     if match:
         return f"reviewer-{match.group(1).lower()}"
-    if model in _REVIEWER_MODEL_MAP:
-        return _REVIEWER_MODEL_MAP[model]
+    if model in _build_reviewer_model_map():
+        return _build_reviewer_model_map()[model]
     return None
 
 
@@ -2087,7 +2401,7 @@ def _subagent_start_model(data: dict[str, Any], fallback: str = "") -> str:
 
 
 def _reviewer_spawn_template(logical_role: str) -> str:
-    model = _REVIEWER_SPAWN_MODELS.get(logical_role, "<reviewer-model>")
+    model = _build_reviewer_spawn_models().get(logical_role, "<reviewer-model>")
     engine = logical_role.removeprefix("reviewer-").capitalize()
     return (
         f'Task(subagent_type="generalPurpose", model="{model}", readonly=true, '
@@ -2140,7 +2454,6 @@ def set_role_from_hook(data: dict[str, Any]) -> dict[str, Any]:
             if spawn_model and not model:
                 model = spawn_model
 
-    workflow = str(config.get("workflow") or "multi-agent-pr")
     progress = ctx["progress"] or {}
 
     role_file = _review_path(ctx["git_root"], ROLES_DIR) / f"{_slug(subagent_id)}.json"
@@ -2456,6 +2769,89 @@ def record_subagent_from_hook(data: dict[str, Any], raw: str) -> dict[str, Any]:
     return {}
 
 
+def compact_inject(data: dict[str, Any]) -> dict[str, Any]:
+    """preCompact hook: inject MAP state summary before context compaction."""
+    ctx = load_map_context(data)
+    if ctx is None:
+        return {}
+    git_root = ctx["git_root"]
+    config = ctx["config"]
+    progress = ctx["progress"]
+    if not config or not config.get("active"):
+        return {}
+    parts: list[str] = []
+    workflow = config.get("workflow", "multi-agent-pr")
+    session_id = config.get("session_id", "?")
+    phase = progress.get("phase") if progress else "?"
+    completed = progress.get("completed") if progress else []
+    parts.append(f"[MAP] workflow={workflow} session={session_id} phase={phase}")
+    if completed:
+        parts.append(f"  completed subagents: {', '.join(str(c) for c in completed)}")
+    for qfile, label in [
+        (FIX_QUEUE_FILE, "fix-queue"),
+        (CRITIC_QUEUE_FILE, "critic-queue"),
+        (SECURITY_QUEUE_FILE, "security-queue"),
+    ]:
+        qdata = _read_json_file(_review_path(git_root, qfile))
+        if qdata is not None:
+            parts.append(f"  {label}: active (see .review/{qfile})")
+    return {"additional_context": "\n".join(parts)}
+
+
+_MCP_WRITE_KEYWORDS = re.compile(
+    r"\b(write|create|update|delete|insert|remove|edit|modify|put|patch|append|set|add)(?=[_\-\s]|$)",
+    re.I,
+)
+
+
+def _mcp_tool_is_write(tool_name: str) -> bool:
+    return bool(_MCP_WRITE_KEYWORDS.search(tool_name or ""))
+
+
+def check_mcp_permission_from_hook(data: dict[str, Any]) -> dict[str, Any]:
+    """beforeMCPExecution hook: block write MCP calls for read-only roles."""
+    ctx = load_map_context(data)
+    if ctx is None:
+        return {"permission": "allow"}
+    git_root = ctx["git_root"]
+    tool_name = str(data.get("tool_name") or data.get("name") or "")
+    if not _mcp_tool_is_write(tool_name):
+        return {"permission": "allow"}
+    subagent_id = str(data.get("subagent_id") or data.get("agent_id") or "")
+    if subagent_id:
+        role_data = _read_json_file(
+            _review_path(git_root, ROLES_DIR) / f"{_slug(subagent_id)}.json"
+        )
+        if role_data:
+            role = str(role_data.get("logical_role") or role_data.get("role") or "")
+            if role.startswith("reviewer-") or role in ("explore",):
+                return {
+                    "permission": "deny",
+                    "user_message": f"MAP: role {role!r} is read-only. MCP tool {tool_name!r} would write data.",
+                }
+    return {"permission": "allow"}
+
+
+_git_cache: dict[str, str] = {}
+
+
+def _git_cached(cmd: list[str], cwd: str | None = None) -> str:
+    cache_key = json.dumps(cmd) + "|" + str(cwd or "")
+    if cache_key in _git_cache:
+        return _git_cache[cache_key]
+    try:
+        result = _run_subprocess(cmd, cwd=cwd)
+        value = result.stdout.strip() if result.returncode == 0 else ""
+    except OSError:
+        value = ""
+    _git_cache[cache_key] = value
+    return value
+
+
+def _clear_git_cache() -> None:
+    _git_cache.clear()
+
+
 def _cli_advance_fix_queue() -> int:
     git_root = Path(sys.argv[2]) if len(sys.argv) > 2 else Path.cwd()
     resolved = sys.argv[3].split(",") if len(sys.argv) > 3 and sys.argv[3] else None
@@ -2502,6 +2898,8 @@ def main() -> int:
         "set-role": lambda: set_role_from_hook(data),
         "check-tool-permission": lambda: check_tool_permission_from_hook(data),
         "check-task-alignment": lambda: check_task_alignment_from_hook(data),
+        "compact-inject": lambda: compact_inject(data),
+        "check-mcp-permission": lambda: check_mcp_permission_from_hook(data),
     }
 
     handler = handlers.get(mode)
@@ -2509,7 +2907,9 @@ def main() -> int:
         print(json.dumps({"permission": "deny", "user_message": f"Unknown review gate mode: {mode}"}))
         return 1
 
-    print(json.dumps(handler()))
+    result = handler()
+    _clear_git_cache()
+    print(json.dumps(result))
     return 0
 
 

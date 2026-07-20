@@ -34,7 +34,7 @@ INSTALL_REMINDER = "Reminder: do not commit .review/ in consumer repos."
 MAP_SKILL_DIRS = ("multi-agent-pr", "map-hyperplan", "map-security", "map-refactor")
 MAP_SKILL_FILES = ("MAP_SKILL_DISCOVERY.md",)
 HOOKS_COPY_NAMES = ("review_gate.py", "run_tests.sh")
-HOOKS_COPY_DIRS = ("schemas", "spikes")
+HOOKS_COPY_DIRS = ("schemas", "spikes", "config")
 
 REVIEW_GATE_MARKER = "review_gate.py"
 
