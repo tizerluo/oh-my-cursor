@@ -280,6 +280,58 @@ class RoleLifecycleTests(unittest.TestCase):
                 result = self.rg.check_tool_permission_from_hook(data)
         self.assertEqual(result["permission"], "deny")
 
+    def test_missing_subagent_id_file_no_active_scan_bind(self) -> None:
+        """幽灵 subagent_id（无角色文件）+ 同 model active coder 时不得 scan 串台。"""
+        self._write_role("call-live", logical_role="coder", model="same-model")
+        ctx = {
+            "git_root": self.root,
+            "config": {"active": True, "session_id": "sess-1", "workflow": "multi-agent-pr"},
+        }
+        data = {
+            "subagent_id": "call-ghost-missing",
+            "tool_name": "StrReplace",
+            "tool_input": {"path": "hooks/review_gate.py"},
+            "model": "same-model",
+        }
+        with patch.object(self.rg, "load_map_context", return_value=ctx):
+            with patch.object(self.rg, "_is_commander_session", return_value=False):
+                result = self.rg.check_tool_permission_from_hook(data)
+        self.assertEqual(result["permission"], "deny")
+
+    def test_transcript_encoder_does_not_infer_coder(self) -> None:
+        """transcript 路径含 encoder 不得误推断为 coder。"""
+        path = (
+            "/Users/u/.cursor/projects/p/agent-transcripts/"
+            "encoder-session/encoder-session.jsonl"
+        )
+        self.assertEqual(self.rg._infer_role_from_transcript(path), "")
+
+    def test_active_scan_missing_session_id_strict_none(self) -> None:
+        """active 角色缺 session_id 时，config 有 session_id 则 scan 返回 None。"""
+        self._write_role(
+            "call-no-sess",
+            logical_role="coder",
+            model="kimi-k3-max",
+            session_id=None,
+        )
+        # 写入时 session_id=None 会被省略；重新写不含 session_id 的 payload
+        role_path = self.root / ".review" / "roles" / f"{self.rg._slug('call-no-sess')}.json"
+        payload = __import__("json").loads(role_path.read_text())
+        payload.pop("session_id", None)
+        role_path.write_text(__import__("json").dumps(payload) + "\n")
+
+        ctx = {
+            "git_root": self.root,
+            "config": {"active": True, "session_id": "sess-1", "workflow": "multi-agent-pr"},
+        }
+        data = {"model": "kimi-k3-max"}
+        with patch.object(self.rg, "_is_commander_session", return_value=False):
+            role, role_data = self.rg._role_for_permission(ctx, data)
+        self.assertEqual(role, "")
+        self.assertIsNone(role_data)
+        scanned = self.rg._resolve_active_role_scan(self.root, data, ctx["config"])
+        self.assertIsNone(scanned)
+
     def test_mcp_createpage_is_write_and_denied_for_reviewer(self) -> None:
         self.assertTrue(self.rg._mcp_tool_is_write("createpage"))
         self.assertFalse(self.rg._mcp_tool_is_write("settings_get"))

@@ -2585,7 +2585,9 @@ def _reviewer_spawn_template(logical_role: str) -> str:
 
 
 def _infer_role_from_transcript(transcript_path: str) -> str:
-    lowered = transcript_path.lower()
+    """从 transcript 路径推断 logical_role；词边界匹配，避免 encoder 误命中 coder。"""
+    lowered = transcript_path.lower().replace("\\", "/")
+    normalized = lowered.replace("-", "")
     for role in (
         "reviewer-grok",
         "reviewer-codex",
@@ -2596,7 +2598,9 @@ def _infer_role_from_transcript(transcript_path: str) -> str:
         "explore",
         "generalpurpose",
     ):
-        if role.replace("-", "") in lowered.replace("-", ""):
+        token = role.replace("-", "")
+        # 非字母数字视为边界，防止子串误匹配（如 encoder 含 coder）
+        if re.search(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])", normalized):
             return role if role != "generalpurpose" else "generalPurpose"
     return ""
 
@@ -2731,10 +2735,11 @@ def _resolve_active_role_scan(
     session_id = str((config or {}).get("session_id") or "")
     # 有 session_id 时始终按会话过滤；无匹配则 fail-closed，不回退到全量 actives
     if session_id:
+        # 配置有 session_id 时严格匹配；缺 session_id 的旧角色不得参与 scan
         actives = [
             r
             for r in actives
-            if not r.get("session_id") or str(r.get("session_id")) == session_id
+            if str(r.get("session_id") or "") == session_id
         ]
 
     event_model = ""
@@ -2789,18 +2794,23 @@ def _role_for_permission(ctx: dict[str, Any], data: dict[str, Any]) -> tuple[str
     role_data: dict[str, Any] | None = None
     if subagent_id:
         role_data = _read_json_file(_review_path(git_root, ROLES_DIR) / f"{_slug(subagent_id)}.json")
-        # 已停用的 subagent_id 不得串台到 active-scan 上的其他角色
-        if isinstance(role_data, dict) and role_data.get("active") is False:
+        if isinstance(role_data, dict):
+            # 已停用的 subagent_id 不得串台到 active-scan 上的其他角色
+            if role_data.get("active") is False:
+                return "", None
+            # active（或缺 active 字段视为 active）：直接使用该文件
+        else:
+            # 角色文件缺失或非 dict：fail-closed，禁止回落到 scan / transcript
             return "", None
-
-    if role_data is None and config and config.get("active"):
-        role_data = _resolve_active_role_scan(git_root, data, config)
-
-    if role_data is None:
-        transcript = _extract_transcript_path(data)
-        inferred = _infer_role_from_transcript(transcript) if transcript else ""
-        if inferred:
-            role_data = {"role": inferred}
+    else:
+        # 仅无 subagent_id 时才允许 active-scan 与 transcript 推断
+        if config and config.get("active"):
+            role_data = _resolve_active_role_scan(git_root, data, config)
+        if role_data is None:
+            transcript = _extract_transcript_path(data)
+            inferred = _infer_role_from_transcript(transcript) if transcript else ""
+            if inferred:
+                role_data = {"role": inferred}
     role = str(
         (role_data or {}).get("logical_role")
         or (role_data or {}).get("role")
