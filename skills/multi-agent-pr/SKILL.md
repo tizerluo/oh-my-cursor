@@ -342,10 +342,10 @@ Hotfix may use a shorter written note instead of a full spec, but it MUST includ
 
 ### 2. Architect Review
 
-Launch background subagent:
+Launch foreground subagent (required on Cursor 3.15+):
 
 ```
-Task(subagent_type="architect", model="gpt-5.5-medium", run_in_background=true)
+Task(subagent_type="architect", model="gpt-5.5-medium", run_in_background=false)
 ```
 
 Prompt must include:
@@ -361,8 +361,8 @@ Prompt must include:
 Launch 2 Architect subagents with different models in parallel:
 
 ```
-Task(subagent_type="architect", model="gpt-5.5-medium", ...)
-Task(subagent_type="architect", model="gemini-3.1-pro", ...)
+Task(subagent_type="architect", model="gpt-5.5-medium", run_in_background=false, ...)
+Task(subagent_type="architect", model="gemini-3.1-pro", run_in_background=false, ...)
 ```
 
 After both complete, Commander cross-sends findings for 1 rebuttal round, then synthesizes:
@@ -423,10 +423,10 @@ This step is optional. Commander may also check CI manually.
 
 Coder 写的测试容易有"实现者盲区"（倾向 happy path、过度 mock 内部函数）。Tester 从独立视角补写测试，重点覆盖 Coder 不会写的部分。
 
-Launch background subagent:
+Launch foreground subagent (required on Cursor 3.15+):
 
 ```
-Task(subagent_type="tester-writer", model="kimi-k2.7-code", run_in_background=true)
+Task(subagent_type="tester-writer", model="kimi-k2.7-code", run_in_background=false)
 ```
 
 Prompt must include:
@@ -468,16 +468,16 @@ Each reviewer prompt must include `logical_role: reviewer-<engine>` (or `Reviewe
 Hotfix review path (one reviewer):
 
 ```
-Task(subagent_type="generalPurpose", model="grok-4.5", readonly=true,
+Task(subagent_type="generalPurpose", model="grok-4.5", readonly=true, run_in_background=false,
      prompt="You are MAP Reviewer-Grok. logical_role: reviewer-grok\n...")
 ```
 
 Standard/Large review path — launch **three subagents in parallel** in one message:
 
 ```
-Task(subagent_type="generalPurpose", model="grok-4.5",         readonly=true, prompt="... logical_role: reviewer-grok\n...")
-Task(subagent_type="generalPurpose", model="gpt-5.3-codex-high-fast", readonly=true, prompt="... logical_role: reviewer-codex\n...")
-Task(subagent_type="generalPurpose", model="gemini-3.1-pro",          readonly=true, prompt="... logical_role: reviewer-gemini\n...")
+Task(subagent_type="generalPurpose", model="grok-4.5",         readonly=true, run_in_background=false, prompt="... logical_role: reviewer-grok\n...")
+Task(subagent_type="generalPurpose", model="gpt-5.3-codex-high-fast", readonly=true, run_in_background=false, prompt="... logical_role: reviewer-codex\n...")
+Task(subagent_type="generalPurpose", model="gemini-3.1-pro",          readonly=true, run_in_background=false, prompt="... logical_role: reviewer-gemini\n...")
 ```
 
 Do **not** use `Task(subagent_type="reviewer-grok", ...)` — Cursor rejects it; the pre-Task hook denies it with the spawn template above.
