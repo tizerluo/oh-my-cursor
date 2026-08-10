@@ -15,7 +15,7 @@ import tempfile
 import hashlib
 import hmac
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -57,6 +57,98 @@ def secret_file_path() -> Path:
     if env:
         return Path(env).expanduser().resolve()
     return HOOKS_DIR / ".review-gate-secret"
+
+
+WORKSPACE_CACHE_TTL_DAYS = 7
+
+
+def workspace_cache_file_path() -> Path:
+    """Per-conversation git root hint for hooks with empty workspace context (Cursor 3.15+)."""
+    env = os.environ.get("OMC_WORKSPACE_CACHE_FILE")
+    if env:
+        return Path(env).expanduser().resolve()
+    return HOOKS_DIR / ".workspace-cache.json"
+
+
+def _extract_conversation_id(data: dict[str, Any]) -> str:
+    for key in ("conversation_id", "conversationId", "session_id", "sessionId"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _parse_iso8601(value: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+
+
+def _empty_workspace_cache() -> dict[str, Any]:
+    return {"version": 1, "entries": {}}
+
+
+def _read_workspace_cache() -> dict[str, Any]:
+    try:
+        raw = _read_json_file(workspace_cache_file_path())
+        if not raw or raw.get("version") != 1:
+            return _empty_workspace_cache()
+        entries = raw.get("entries")
+        if not isinstance(entries, dict):
+            return _empty_workspace_cache()
+        return raw
+    except OSError:
+        return _empty_workspace_cache()
+
+
+def _lookup_workspace_cache(conversation_id: str) -> Path | None:
+    # Cache is a hint only; markers stay HMAC-sealed and branch/head-scoped.
+    if not conversation_id:
+        return None
+    try:
+        entry = _read_workspace_cache().get("entries", {}).get(conversation_id)
+        if not isinstance(entry, dict):
+            return None
+        root = entry.get("root")
+        if not isinstance(root, str) or not root.strip():
+            return None
+        cached_root = Path(root).expanduser().resolve()
+        if _git_root(str(cached_root)) is None:
+            return None
+        return cached_root
+    except OSError:
+        return None
+
+
+def _upsert_workspace_cache(conversation_id: str, git_root: Path) -> None:
+    if not conversation_id:
+        return
+    try:
+        cache = _read_workspace_cache()
+        entries = cache.get("entries")
+        if not isinstance(entries, dict):
+            entries = {}
+        cutoff = datetime.now(timezone.utc) - timedelta(days=WORKSPACE_CACHE_TTL_DAYS)
+        pruned: dict[str, Any] = {}
+        for cid, entry in entries.items():
+            if not isinstance(entry, dict):
+                continue
+            updated_at = entry.get("updated_at")
+            if not isinstance(updated_at, str):
+                continue
+            ts = _parse_iso8601(updated_at)
+            if ts is not None and ts >= cutoff:
+                pruned[cid] = entry
+        pruned[conversation_id] = {
+            "root": str(git_root.resolve()),
+            "updated_at": _now_iso(),
+        }
+        cache["version"] = 1
+        cache["entries"] = pruned
+        _write_json_file(workspace_cache_file_path(), cache)
+    except OSError:
+        pass
 
 
 def _secret_fail(message: str) -> NoReturn:
@@ -701,15 +793,21 @@ def load_config(git_root: Path) -> dict[str, Any] | None:
 
 def load_map_context(data: dict[str, Any]) -> dict[str, Any] | None:
     cwd = _extract_cwd(data)
-    git_root = _git_root(cwd)
+    git_root = _git_root(cwd) if cwd.strip() else None
+    effective_cwd = cwd
     if git_root is None:
-        return None
+        cached = _lookup_workspace_cache(_extract_conversation_id(data))
+        if cached is None:
+            return None
+        git_root = cached
+        effective_cwd = str(cached)
+    _upsert_workspace_cache(_extract_conversation_id(data), git_root)
     branch = _git_branch(str(git_root))
     head_sha = _git_head(str(git_root))
     if not branch or not head_sha:
         return None
     return {
-        "cwd": cwd,
+        "cwd": effective_cwd,
         "git_root": git_root,
         "branch": branch,
         "head_sha": head_sha,

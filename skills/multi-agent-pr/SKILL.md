@@ -381,10 +381,14 @@ Hotfix may skip this step only when Architect was skipped.
 
 ### 4. Coder Implementation
 
-Launch background subagent:
+
+> **Cursor 3.15+ — foreground subagents only:** The platform never fires `subagentStop` for **background** subagents (`run_in_background=true`). MAP merge-gate markers are recorded only on `subagentStop`, so **every** MAP subagent spawn (Coder, Architect, Tester, Reviewers) **MUST** use `run_in_background=false`. Foreground spawns are required for hook-recorded session markers under `.review/session/`.
+
+Launch foreground subagent (required on Cursor 3.15+):
+
 
 ```
-Task(subagent_type="coder", model="composer-2.5-fast", run_in_background=true)
+Task(subagent_type="coder", model="composer-2.5-fast", run_in_background=false)
 ```
 
 Hotfix MUST use Coder. Commander MUST NOT implement Hotfix code directly.
