@@ -30,7 +30,7 @@
       },
       {
         "command": "python3 {{REVIEW_GATE_QUOTED_PATH}} check-tool-permission",
-        "matcher": "Write|Delete",
+        "matcher": "Write|Delete|StrReplace",
         "failClosed": true,
         "omc": true
       }

@@ -33,6 +33,10 @@ FIX_QUEUE_FILE = "fix-queue.json"
 CRITIC_QUEUE_FILE = "critic-queue.json"
 SECURITY_QUEUE_FILE = "security-queue.json"
 ROLES_DIR = "roles"
+# 平台编辑类工具（Cursor 3.15+ StrReplace 与 Write/Delete 同等受角色门约束）
+EDIT_TOOLS = frozenset({"Write", "Delete", "StrReplace"})
+# 小写连写 MCP 写动词别名（分词器无法从 createpage 拆出 create）
+_MCP_WRITE_ALIASES = frozenset({"createpage", "updatepage", "deletepage", "insertpage"})
 ROUTING_RULES_FILE = "routing-rules.json"
 HOOKS_DIR = Path(__file__).resolve().parent
 MODELS_CONFIG_FILE = HOOKS_DIR / "config" / "models.json"
@@ -2581,7 +2585,9 @@ def _reviewer_spawn_template(logical_role: str) -> str:
 
 
 def _infer_role_from_transcript(transcript_path: str) -> str:
-    lowered = transcript_path.lower()
+    """从 transcript 路径推断 logical_role；词边界匹配，避免 encoder 误命中 coder。"""
+    lowered = transcript_path.lower().replace("\\", "/")
+    normalized = lowered.replace("-", "")
     for role in (
         "reviewer-grok",
         "reviewer-codex",
@@ -2592,10 +2598,25 @@ def _infer_role_from_transcript(transcript_path: str) -> str:
         "explore",
         "generalpurpose",
     ):
-        if role.replace("-", "") in lowered.replace("-", ""):
+        token = role.replace("-", "")
+        # 非字母数字视为边界，防止子串误匹配（如 encoder 含 coder）
+        if re.search(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])", normalized):
             return role if role != "generalpurpose" else "generalPurpose"
     return ""
 
+
+
+def _infer_logical_role_from_prompt(prompt: str) -> str:
+    """从 spawn prompt 解析 `logical_role: <role>`（含 coder / reviewer-*）。"""
+    if not prompt:
+        return ""
+    match = re.search(r"logical_role:\s*([A-Za-z0-9_-]+)", prompt, re.I)
+    if not match:
+        return ""
+    role = match.group(1).strip()
+    if role.lower() == "generalpurpose":
+        return "generalPurpose"
+    return role
 
 def set_role_from_hook(data: dict[str, Any]) -> dict[str, Any]:
     ctx = load_map_context(data)
@@ -2616,26 +2637,41 @@ def set_role_from_hook(data: dict[str, Any]) -> dict[str, Any]:
     if not logical_role and config:
         logical_role = _resolve_logical_role(config, subagent_type)
 
+    spawn_prompt = _subagent_start_prompt(data)
+    prompt_role = _infer_logical_role_from_prompt(spawn_prompt)
+    # prompt 仅可填充空角色或 generalPurpose；不得覆盖 config/payload 已定的具体角色
+    if prompt_role and (not logical_role or logical_role == "generalPurpose"):
+        logical_role = prompt_role
+
     if subagent_type == "generalPurpose":
         spawn_model = _subagent_start_model(data, model)
-        spawn_prompt = _subagent_start_prompt(data)
         inferred_reviewer = _infer_reviewer_logical_role(spawn_model, spawn_prompt)
-        if inferred_reviewer:
+        # 显式/配置/prompt 的 logical_role 优先；仅空或仍为 generalPurpose 时才用模型推断
+        if inferred_reviewer and (not logical_role or logical_role == "generalPurpose"):
             logical_role = inferred_reviewer
             if spawn_model and not model:
                 model = spawn_model
+        elif spawn_model and not model:
+            model = spawn_model
 
     progress = ctx["progress"] or {}
+    config_session = str(config.get("session_id") or "") if config else ""
+    conv_id = _extract_conversation_id(data)
 
     role_file = _review_path(ctx["git_root"], ROLES_DIR) / f"{_slug(subagent_id)}.json"
     payload = {
+        "schema_version": 1,
         "subagent_id": subagent_id,
         "role": subagent_type,
         "logical_role": logical_role or subagent_type,
         "subagent_type": subagent_type,
         "model": model or None,
         "workflow": config.get("workflow"),
+        "session_id": config_session or None,
+        "conversation_id": conv_id or None,
+        "active": True,
         "started_at": _now_iso(),
+        "capability_class": _role_capability_class(logical_role or subagent_type),
     }
     _write_json_file(role_file, payload)
 
@@ -2653,17 +2689,128 @@ def set_role_from_hook(data: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _role_capability_class(logical_role: str) -> str:
+    """将 logical_role 归为权限类别，供 active-scan 冲突检测。"""
+    role = (logical_role or "").strip()
+    if role.startswith("reviewer-") or role in {"explore", "planner"}:
+        return "readonly"
+    if role in {"coder", "tester-writer", "poc-exploit"}:
+        return "implementer"
+    if role in {"architect"}:
+        return "spec"
+    if role == "generalPurpose":
+        return "general"
+    return "other"
+
+
+def _iter_active_role_files(git_root: Path) -> list[dict[str, Any]]:
+    """读取 .review/roles 下仍标记 active 的角色文件。"""
+    roles_dir = _review_path(git_root, ROLES_DIR)
+    if not roles_dir.is_dir():
+        return []
+    active: list[dict[str, Any]] = []
+    for path in sorted(roles_dir.glob("*.json")):
+        data = _read_json_file(path)
+        if not isinstance(data, dict):
+            continue
+        if data.get("active") is False:
+            continue
+        # 旧文件无 active 字段：视为 active（兼容升级前角色文件）
+        active.append(data)
+    return active
+
+
+def _resolve_active_role_scan(
+    git_root: Path, data: dict[str, Any], config: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """无 subagent_id 时扫描 active 角色；仅唯一可解析时返回。
+
+    Cursor 3.15：子代理 preToolUse 不带 subagent_id，但带独立 model /
+    conversation_id。优先按 model 唯一匹配；否则要求单一 active 或
+    同一 logical_role；冲突则 fail-closed（返回 None）。
+    """
+    actives = _iter_active_role_files(git_root)
+    if not actives:
+        return None
+    session_id = str((config or {}).get("session_id") or "")
+    # 有 session_id 时始终按会话过滤；无匹配则 fail-closed，不回退到全量 actives
+    if session_id:
+        # 配置有 session_id 时严格匹配；缺 session_id 的旧角色不得参与 scan
+        actives = [
+            r
+            for r in actives
+            if str(r.get("session_id") or "") == session_id
+        ]
+
+    event_model = ""
+    for key in ("model", "agent_model", "subagent_model"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            event_model = value.strip()
+            break
+
+    if event_model:
+        by_model = [r for r in actives if str(r.get("model") or "") == event_model]
+        if len(by_model) == 1:
+            return by_model[0]
+        if len(by_model) > 1:
+            return None  # 同 model 并行冲突
+
+    if len(actives) == 1:
+        return actives[0]
+
+    roles = {
+        str(r.get("logical_role") or r.get("role") or "")
+        for r in actives
+    }
+    roles.discard("")
+    if len(roles) == 1:
+        return actives[0]
+    return None
+
+
+def _deactivate_role_file(git_root: Path, subagent_id: str) -> None:
+    """subagentStop 时按 id 将角色标记为 inactive。"""
+    if not subagent_id:
+        return
+    role_file = _review_path(git_root, ROLES_DIR) / f"{_slug(subagent_id)}.json"
+    role_data = _read_json_file(role_file)
+    if not isinstance(role_data, dict):
+        return
+    role_data = dict(role_data)
+    role_data["active"] = False
+    role_data["stopped_at"] = _now_iso()
+    _write_json_file(role_file, role_data)
+
+
 def _role_for_permission(ctx: dict[str, Any], data: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
     git_root = ctx["git_root"]
+    config = ctx.get("config") if isinstance(ctx.get("config"), dict) else None
+    # Commander-first：父会话绝不走 active-scan，避免继承子代理角色
+    if _is_commander_session(data):
+        return "", None
+
     subagent_id = _extract_subagent_fields(data)[2]
     role_data: dict[str, Any] | None = None
     if subagent_id:
         role_data = _read_json_file(_review_path(git_root, ROLES_DIR) / f"{_slug(subagent_id)}.json")
-    if role_data is None:
-        transcript = _extract_transcript_path(data)
-        inferred = _infer_role_from_transcript(transcript) if transcript else ""
-        if inferred:
-            role_data = {"role": inferred}
+        if isinstance(role_data, dict):
+            # 已停用的 subagent_id 不得串台到 active-scan 上的其他角色
+            if role_data.get("active") is False:
+                return "", None
+            # active（或缺 active 字段视为 active）：直接使用该文件
+        else:
+            # 角色文件缺失或非 dict：fail-closed，禁止回落到 scan / transcript
+            return "", None
+    else:
+        # 仅无 subagent_id 时才允许 active-scan 与 transcript 推断
+        if config and config.get("active"):
+            role_data = _resolve_active_role_scan(git_root, data, config)
+        if role_data is None:
+            transcript = _extract_transcript_path(data)
+            inferred = _infer_role_from_transcript(transcript) if transcript else ""
+            if inferred:
+                role_data = {"role": inferred}
     role = str(
         (role_data or {}).get("logical_role")
         or (role_data or {}).get("role")
@@ -2700,8 +2847,11 @@ def _is_root_transcript_path(transcript: str) -> bool:
 
 def _is_commander_session(data: dict[str, Any]) -> bool:
     """True for the parent Commander session (not a subagent transcript)."""
-    _, _, subagent_id = _extract_subagent_fields(data)
+    subagent_type, _, subagent_id = _extract_subagent_fields(data)
     if subagent_id:
+        return False
+    # 防御纵深：若载荷带非空 subagent_type，绝不可能是 Commander
+    if isinstance(subagent_type, str) and subagent_type.strip():
         return False
     transcript = _extract_transcript_path(data)
     if not transcript:
@@ -2759,8 +2909,19 @@ def check_tool_permission_from_hook(data: dict[str, Any]) -> dict[str, Any]:
                 "user_message": "Dangerous shell command blocked for security hunter/PoC role.",
                 "agent_message": "BLOCKED: use .review/poc/ sandbox only.",
             }
+        elif role == "" and not _is_commander_session(data):
+            # 未识别角色：Shell 写路径 fail-closed（与 #22 空角色逃逸对齐）
+            if not _shell_readonly_safe(command):
+                return {
+                    "permission": "deny",
+                    "user_message": "Shell file-write blocked: no MAP role assigned.",
+                    "agent_message": (
+                        "BLOCKED: unidentified session cannot write via Shell; "
+                        "spawn a coder subagent or use a read-only command."
+                    ),
+                }
 
-    if tool_name not in {"Write", "Delete"}:
+    if tool_name not in EDIT_TOOLS:
         return {"permission": "allow"}
 
     norm_path = path.replace("\\", "/")
@@ -2793,9 +2954,9 @@ def check_tool_permission_from_hook(data: dict[str, Any]) -> dict[str, Any]:
             }
         return {
             "permission": "deny",
-            "user_message": "Write/Delete blocked: no MAP role assigned.",
+            "user_message": "Write/Delete/StrReplace blocked: no MAP role assigned.",
             "agent_message": (
-                "BLOCKED: subagent without role file cannot Write/Delete. "
+                "BLOCKED: subagent without role file cannot Write/Delete/StrReplace. "
                 "Commander may write .review/ and .specs/ only."
             ),
         }
@@ -2971,6 +3132,9 @@ def record_subagent_from_hook(data: dict[str, Any], raw: str) -> dict[str, Any]:
     }
     _write_marker(git_root, branch, head_sha, marker)
     _write_session_summary(git_root, branch, head_sha)
+    # 按 subagent_id 失活角色，避免 stop 后 active-scan 仍命中陈旧角色
+    if subagent_id:
+        _deactivate_role_file(git_root, subagent_id)
 
     if marker_type == "coder":
         return {
@@ -3052,9 +3216,10 @@ def _tokenize_mcp_tool_name(tool_name: str) -> list[str]:
 
 
 def _mcp_tool_is_write(tool_name: str) -> bool:
-    # 已知限制：全小写连写的动词（如 "createpage"）没有分隔符或 camelCase 边界，
-    # 分词后不会命中动词表，因此这类工具名识别不到写语义；
-    # 该门仅是防御纵深的一层，最终仍以角色 Write/Delete 权限为兜底。
+    # 全小写连写动词靠显式别名表；其余按分隔符/camelCase 分词命中动词表。
+    lowered = (tool_name or "").lower()
+    if lowered in _MCP_WRITE_ALIASES:
+        return True
     return any(token in _MCP_WRITE_VERBS for token in _tokenize_mcp_tool_name(tool_name))
 
 
@@ -3063,22 +3228,25 @@ def check_mcp_permission_from_hook(data: dict[str, Any]) -> dict[str, Any]:
     ctx = load_map_context(data)
     if ctx is None:
         return {"permission": "allow"}
-    git_root = ctx["git_root"]
+    config = ctx["config"]
+    # 与 Write/Shell 门一致：MAP 未激活时不拦截 MCP
+    if not config or not config.get("active"):
+        return {"permission": "allow"}
     tool_name = _extract_tool_name(data)
     if not _mcp_tool_is_write(tool_name):
         return {"permission": "allow"}
-    _, _, subagent_id = _extract_subagent_fields(data)
-    if subagent_id:
-        role_data = _read_json_file(
-            _review_path(git_root, ROLES_DIR) / f"{_slug(subagent_id)}.json"
-        )
-        if role_data:
-            role = str(role_data.get("logical_role") or role_data.get("role") or "")
-            if role.startswith("reviewer-") or role in ("explore",):
-                return {
-                    "permission": "deny",
-                    "user_message": f"MAP: role {role!r} is read-only. MCP tool {tool_name!r} would write data.",
-                }
+    # 与 Write 门共用角色解析（含 active-scan）；外部 MCP 不会再经本地 Write 兜底
+    role, _role_data = _role_for_permission(ctx, data)
+    if role.startswith("reviewer-") or role in ("explore", "planner"):
+        return {
+            "permission": "deny",
+            "user_message": f"MAP: role {role!r} is read-only. MCP tool {tool_name!r} would write data.",
+        }
+    if role == "" and not _is_commander_session(data):
+        return {
+            "permission": "deny",
+            "user_message": f"MAP: no role assigned. MCP tool {tool_name!r} would write data.",
+        }
     return {"permission": "allow"}
 
 

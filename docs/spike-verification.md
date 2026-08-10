@@ -64,3 +64,34 @@ If `phase=synthesis-complete` and fix-queue has pending P0/P1, **every stop** ma
 - stop followup_message: _pending live Cursor test_
 - sessionStart additional_context: _pending live Cursor test_
 - subagentStart dispatch: _pending live Cursor test_; subagentStop known unreliable on Cursor 3.7.12
+
+
+## Appendix: Cursor 3.15.6 payload shapes (issue #22 / v1.3.1)
+
+**Date:** 2026-08-10 · **Cursor:** 3.15.6 · **Source:** live `cursor.hooks.*.log` INPUT blocks (oh-my-cursor workspace).
+
+### Field presence
+
+| Field | subagentStart | subagentStop | preToolUse (parent) | preToolUse (subagent) |
+|-------|---------------|--------------|---------------------|------------------------|
+| `subagent_id` | present (`call-…`) | present | **absent** | **absent** |
+| `subagent_type` | present | present | absent | absent |
+| `conversation_id` | **parent** UUID | **parent** UUID | parent UUID | **agent** UUID (≠ parent) |
+| `session_id` | parent | parent | parent | **same as agent cid** |
+| `parent_conversation_id` | = parent | = parent | n/a | n/a |
+| `transcript_path` | parent root jsonl | parent root jsonl | parent root jsonl | **null** |
+| `agent_transcript_path` | null | null | absent | absent |
+| `model` | present | present | present | present |
+| `is_parallel_worker` | present (often false) | n/a | n/a | n/a |
+
+### Join-key conclusion
+
+- There is **no** payload field that joins `subagentStart.subagent_id` to subagent `preToolUse.conversation_id`.
+- Parent vs subagent `preToolUse` **are** distinguishable: parent has root `transcript_path`; subagent has `transcript_path=null` and a distinct agent `conversation_id`.
+- **Stable join for permissions:** keep `roles/{slug(subagent_id)}.json` with `active` + `model`; on preToolUse without `subagent_id`, scan active roles and resolve when **model uniquely matches** (or a single active role / single logical_role). Conflicts → fail-closed.
+- **Forbidden:** single-value `by-conversation/{parent_cid}` sidecar (would alias Commander to last child).
+
+### Parallel safety
+
+Multiple active roles with the same model or conflicting write capabilities must fail-closed. MAP Large may spawn parallel reviewers (foreground ≠ exclusive).
+
