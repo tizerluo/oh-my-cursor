@@ -16,7 +16,7 @@ description: >-
 
 ```
 config-confirmed → analysis → baseline → implement → regression
-  → review-pending → synthesis-complete → merge-ready → merged → cleanup
+  → review-pending → synthesis-complete → merge-ready → (merged | cleanup)
 ```
 
 CI / late failure recovery (same as multi-agent-pr): `merge-ready → fix-round-N → regression → …` (not a direct jump to `review-pending`).

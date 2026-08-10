@@ -9,7 +9,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - **v1.3.1 follow-ups (#22):** Cursor 3.15 role lifecycle (active-scan, Commander-first, empty-role Shell deny, StrReplace/MCP shared lookup); doctor `hooks.json` `version` must be integer `1`; `requirements-dev.txt` + `hooks/run_ci_local.sh`; `merge-ready → fix-round-*` recovery; map-refactor terminal phases `merged`/`cleanup`
-- Docs: cloud-agent hook limitation; README/CHANGELOG test counts; map-refactor pipeline through `cleanup`
+- Docs: cloud-agent hook availability and lifecycle limitations; README/CHANGELOG test counts; map-refactor `merged` / `cleanup` terminal alternatives
 
 ## [1.3.0] - 2026-08-10
 

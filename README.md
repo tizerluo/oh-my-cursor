@@ -53,7 +53,7 @@ python3 scripts/install.py --doctor --security
 
 Hook **runtime** needs Python 3 stdlib only (no pip). Lint/typecheck/coverage for contributors use [`requirements-dev.txt`](requirements-dev.txt) — see [Development](#development).
 
-**Cloud agents:** Cursor cloud VMs do **not** load user-level `~/.cursor/hooks.json`. MAP merge-gate / permission hooks therefore do not run in cloud sessions unless you install **project-level** hooks (e.g. `./install.sh --project /path/to/repo`) or use team/enterprise hooks. Prefer `--project` for any cloud-agent workflow. Details: [docs/install.md](docs/install.md).
+**Cloud agents:** Cursor cloud VMs do **not** load user-level `~/.cursor/hooks.json`. Project, team, or enterprise hooks require their hook files to be **present in the cloud workspace**—typically commit `.cursor/`, or install MAP with `./install.sh --project /path/to/repo` into the repository that the cloud agent clones. Some lifecycle hooks (including `sessionStart`, `stop`, and `subagentStop`) may not fire in cloud exactly as they do in Desktop, so MAP markers and merge-gate evidence may remain incomplete even with `--project`. Use Desktop for full MAP enforcement; `--project` remains the correct packaging for hooks that are available in cloud. Details: [docs/install.md](docs/install.md).
 
 Details: [docs/install.md](docs/install.md) · [docs/security.md](docs/security.md) · [docs/state-migration.md](docs/state-migration.md) · [docs/integrations/issue-to-pr.md](docs/integrations/issue-to-pr.md)
 
@@ -306,7 +306,7 @@ Skill: [skills/map-security/SKILL.md](skills/map-security/SKILL.md)
 **Use for:** module split, migration, rename with regression proof.
 
 ```
-config-confirmed → analysis → baseline → implement → regression → review-pending → synthesis-complete → merge-ready
+config-confirmed → analysis → baseline → implement → regression → review-pending → synthesis-complete → merge-ready → (merged | cleanup)
 ```
 
 | Phase | Business step | State recorded |
