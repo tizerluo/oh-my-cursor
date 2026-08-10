@@ -21,10 +21,10 @@ jobs:
         run: pip install ruff mypy coverage
 
       - name: Lint
-        run: ruff check hooks/ --select E,F,W --ignore E501
+        run: ruff check hooks/ tests/ scripts/ --select E,F,W --ignore E501
 
       - name: Type check
-        run: mypy hooks/review_gate.py --ignore-missing-imports --no-error-summary 2>&1 || true
+        run: mypy hooks/review_gate.py --ignore-missing-imports --no-error-summary
 
       - name: Run tests
         run: bash hooks/run_tests.sh
@@ -33,3 +33,39 @@ jobs:
         run: |
           coverage run -m unittest discover -s tests -p "test_*.py" -t tests
           coverage report --fail-under=70
+
+      - name: Python compile check
+        run: |
+          python3 -m py_compile hooks/review_gate.py
+          python3 -m py_compile scripts/install.py
+          python3 -m py_compile scripts/migrate_map_state.py
+
+      - name: Install smoke (copy + doctor --security)
+        env:
+          HOME: ${{ runner.temp }}/omc_ci_home
+        run: |
+          mkdir -p "$HOME"
+          python3 scripts/install.py --copy --target "$HOME/.cursor"
+          python3 scripts/install.py --doctor --security --target "$HOME/.cursor"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          home = Path(os.environ["HOME"])
+          models = home / ".cursor" / "hooks" / "config" / "models.json"
+          assert models.is_file(), models
+          data = json.loads(models.read_text(encoding="utf-8"))
+          reviewers = data.get("reviewers") or {}
+          for key in ("reviewer-grok", "reviewer-codex", "reviewer-gemini"):
+              assert key in reviewers, key
+          print("models.json reviewer keys OK")
+          PY
+
+      - name: Install smoke (project copy)
+        run: |
+          PROJECT="${{ runner.temp }}/omc_ci_project"
+          mkdir -p "$PROJECT"
+          python3 scripts/install.py --copy --project "$PROJECT"
+          python3 scripts/install.py --doctor --security --target "$PROJECT/.cursor"
+
+      - name: Stale path check
+        run: ./scripts/ci_check_stale_paths.sh
