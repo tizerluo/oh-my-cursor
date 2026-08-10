@@ -14,3 +14,7 @@ hooks/spikes/*.log
 # Review state (consumer repos only; engine repo does not commit .review/)
 .review/
 .review-session/
+
+# Local agent work logs (may contain machine paths / session ops)
+progress.md
+Progress.md
