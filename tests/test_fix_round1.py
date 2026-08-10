@@ -85,7 +85,12 @@ class AdvanceFixQueuePhaseTests(unittest.TestCase):
             root = Path(tmp)
             (root / ".review").mkdir()
             (root / ".review/fix-queue.json").write_text(
-                json.dumps({"p0_issues": [{"id": "a"}], "p1_issues": []})
+                json.dumps(
+                    {
+                        "p0_issues": [{"id": "a"}, {"id": "b"}],
+                        "p1_issues": [],
+                    }
+                )
             )
             (root / ".review/config.json").write_text(json.dumps({"workflow": "multi-agent-pr"}))
             (root / ".review/progress.json").write_text(json.dumps({"phase": "fix-round-1"}))

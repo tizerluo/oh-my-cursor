@@ -216,7 +216,13 @@ class DoctorModelsConfigTests(unittest.TestCase):
             )
             (cursor_dir / "hooks.json").write_text(json.dumps({"hooks": {}}), encoding="utf-8")
             (cursor_dir / "omc-install.json").write_text(
-                json.dumps({"mode": "copy", "installed_at": "2026-01-01T00:00:00Z"}),
+                json.dumps(
+                    {
+                        "mode": "copy",
+                        "installed_at": "2026-01-01T00:00:00Z",
+                        "review_gate_path": str(gate),
+                    }
+                ),
                 encoding="utf-8",
             )
             with patch.object(omc_install, "expected_map_hook_count", return_value=0):
@@ -228,10 +234,17 @@ class DoctorModelsConfigTests(unittest.TestCase):
             cursor_dir = Path(tmp) / ".cursor"
             hooks = cursor_dir / "hooks"
             hooks.mkdir(parents=True)
-            (hooks / "review_gate.py").write_text("# stub\n", encoding="utf-8")
+            gate = hooks / "review_gate.py"
+            gate.write_text("# stub\n", encoding="utf-8")
             (cursor_dir / "hooks.json").write_text(json.dumps({"hooks": {}}), encoding="utf-8")
             (cursor_dir / "omc-install.json").write_text(
-                json.dumps({"mode": "copy", "installed_at": "2026-01-01T00:00:00Z"}),
+                json.dumps(
+                    {
+                        "mode": "copy",
+                        "installed_at": "2026-01-01T00:00:00Z",
+                        "review_gate_path": str(gate),
+                    }
+                ),
                 encoding="utf-8",
             )
             with patch.object(omc_install, "expected_map_hook_count", return_value=0):
