@@ -110,6 +110,17 @@ def _lookup_workspace_cache(conversation_id: str) -> Path | None:
         entry = _read_workspace_cache().get("entries", {}).get(conversation_id)
         if not isinstance(entry, dict):
             return None
+        # G2: 读取侧同样执行 7 天 TTL——过期或缺有效时间戳的条目在查找时直接忽略，
+        # 不再等到写入时才 prune。
+        updated_at = entry.get("updated_at")
+        ts = _parse_iso8601(updated_at) if isinstance(updated_at, str) else None
+        if ts is None:
+            return None
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=WORKSPACE_CACHE_TTL_DAYS)
+        if ts < cutoff:
+            return None
         root = entry.get("root")
         if not isinstance(root, str) or not root.strip():
             return None
@@ -498,6 +509,7 @@ VALID_TRANSITIONS: dict[str, dict[str, list[str]]] = {
         "fix-round-*": ["regression"],
         "review-pending": ["synthesis-complete"],
         "synthesis-complete": ["merge-ready", "fix-round-*", "synthesis-complete"],
+        "merge-ready": ["merged", "cleanup"],
     },
 }
 
@@ -662,7 +674,12 @@ def _extract_command(data: dict[str, Any]) -> str:
     return ""
 
 
-def _extract_cwd(data: dict[str, Any]) -> str:
+def _extract_explicit_cwd(data: dict[str, Any]) -> str:
+    """Payload-carried workspace hint only; '' when the event has none.
+
+    G2: Cursor 3.15+ 的 subagentStop 等事件常带空 workspace_roots 且无 cwd。
+    只有事件显式携带的 cwd/roots 才允许回写 workspace cache，防止污染。
+    """
     tool_input = data.get("tool_input")
     if not isinstance(tool_input, dict):
         tool_input = {}
@@ -679,6 +696,13 @@ def _extract_cwd(data: dict[str, Any]) -> str:
     roots = data.get("workspace_roots")
     if isinstance(roots, list) and roots and isinstance(roots[0], str) and roots[0].strip():
         return roots[0]
+    return ""
+
+
+def _extract_cwd(data: dict[str, Any]) -> str:
+    explicit = _extract_explicit_cwd(data)
+    if explicit:
+        return explicit
     return os.getcwd()
 
 
@@ -832,16 +856,31 @@ def load_config(git_root: Path) -> dict[str, Any] | None:
 
 
 def load_map_context(data: dict[str, Any]) -> dict[str, Any] | None:
-    cwd = _extract_cwd(data)
-    git_root = _git_root(cwd) if cwd.strip() else None
-    effective_cwd = cwd
+    conversation_id = _extract_conversation_id(data)
+    explicit_cwd = _extract_explicit_cwd(data)
+    git_root: Path | None = None
+    effective_cwd = ""
+    if explicit_cwd:
+        # 事件自带 workspace 上下文：以它为准，且允许回写缓存。
+        git_root = _git_root(explicit_cwd)
+        effective_cwd = explicit_cwd
     if git_root is None:
-        cached = _lookup_workspace_cache(_extract_conversation_id(data))
-        if cached is None:
-            return None
-        git_root = cached
-        effective_cwd = str(cached)
-    _upsert_workspace_cache(_extract_conversation_id(data), git_root)
+        # 空 workspace_roots / 无 cwd 的事件：优先读缓存，避免 hook 进程
+        # 自身 cwd 落在别的仓库时把错误 root 写进缓存（G2 防污染）。
+        cached = _lookup_workspace_cache(conversation_id)
+        if cached is not None:
+            git_root = cached
+            effective_cwd = str(cached)
+    if git_root is None and not explicit_cwd:
+        # 最后手段：hook 进程自身 cwd。只用于解析，绝不回写缓存。
+        fallback_cwd = os.getcwd()
+        git_root = _git_root(fallback_cwd)
+        if git_root is not None:
+            effective_cwd = fallback_cwd
+    if git_root is None:
+        return None
+    if explicit_cwd:
+        _upsert_workspace_cache(conversation_id, git_root)
     branch = _git_branch(str(git_root))
     head_sha = _git_head(str(git_root))
     if not branch or not head_sha:
@@ -1763,16 +1802,8 @@ class CriticQueue(QueueManager):
         pending = data.get("pending_items") or []
         if not isinstance(pending, list):
             pending = []
-        kept = []
-        for item in pending:
-            if not isinstance(item, dict):
-                continue
-            item_id = str(item.get("id") or item.get("dimension") or "")
-            if item_id and item_id in resolved_ids:
-                continue
-            kept.append(item)
-        data["pending_items"] = kept
-        if not kept:
+        data["pending_items"] = _filter_critic_pending(pending, resolved_ids)
+        if not data["pending_items"]:
             self.delete()
         else:
             self.save(data)
@@ -1875,24 +1906,11 @@ def advance_fix_queue(
         return {"ok": False, "reason": "fix-queue missing"}
 
     resolved = {str(i) for i in (mark_resolved_ids or [])}
+    # 预演剩余条目以确定队列动作与返回计数；真正的过滤/轮次改写必须
+    # 委托给 FixQueue 类方法，保证语义只有一处实现（G4）。
     p0 = _filter_resolved_issues(_issue_list(fix_queue, "p0_issues"), resolved)
     p1 = _filter_resolved_issues(_issue_list(fix_queue, "p1_issues"), resolved)
-    fix_queue["p0_issues"] = p0
-    fix_queue["p1_issues"] = p1
-
-    if increment_round:
-        fix_queue["round"] = int(fix_queue.get("round") or 0) + 1
-    if head_sha:
-        fix_queue["head_sha"] = head_sha
-    if branch:
-        fix_queue["branch"] = branch
-
-    if not p0 and not p1:
-        fix_q.delete()
-        queue_action = "deleted"
-    else:
-        fix_q.save(fix_queue)
-        queue_action = "updated"
+    queue_action = "updated" if (p0 or p1) else "deleted"
 
     progress_path = _review_path(git_root, PROGRESS_FILE)
     progress = _read_json_file(progress_path) or {}
@@ -1901,6 +1919,8 @@ def advance_fix_queue(
     workflow = str(config.get("workflow") or "multi-agent-pr")
     target_phase = _fix_queue_advance_target_phase(workflow)
     current_phase = str(progress.get("phase") or "")
+    # G5: 先做阶段迁移校验/写入；一旦抛出 PhaseTransitionError，
+    # 队列文件保持原样，不会出现"已解决条目被删但进度未迁移"的丢失。
     if current_phase != target_phase:
         if force_phase:
             print(
@@ -1911,6 +1931,20 @@ def advance_fix_queue(
             safe_transition_phase(git_root, workflow, target_phase, force=True)
         else:
             safe_transition_phase(git_root, workflow, target_phase)
+
+    fix_q.resolve_ids(resolved)
+    queue_round: Any = fix_queue.get("round")
+    if queue_action == "updated":
+        if increment_round:
+            queue_round = fix_q.increment_round()
+        if head_sha or branch:
+            data = fix_q.load() or {}
+            if head_sha:
+                data["head_sha"] = head_sha
+            if branch:
+                data["branch"] = branch
+            fix_q.save(data)
+
     progress = _read_json_file(progress_path) or {}
     if head_sha:
         progress["head_sha"] = head_sha
@@ -1921,7 +1955,8 @@ def advance_fix_queue(
     progress["updated_at"] = _now_iso()
     _write_json_file(progress_path, progress)
 
-    queue_round = fix_queue.get("round") if queue_action == "updated" else None
+    if queue_action != "updated":
+        queue_round = None
     progress_fix_round = int(progress.get("fix_round") or 0)
     return {
         "ok": True,
@@ -1933,6 +1968,21 @@ def advance_fix_queue(
         "progress_fix_round": progress_fix_round,
         "round": int(queue_round or 0) if queue_action == "updated" else progress_fix_round,
     }
+
+
+def _filter_critic_pending(
+    pending: list[Any], resolved_ids: set[str]
+) -> list[dict[str, Any]]:
+    """过滤已解决的 critic 条目；CriticQueue 与 advance 预览共用同一实现。"""
+    kept: list[dict[str, Any]] = []
+    for item in pending:
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("id") or item.get("dimension") or "")
+        if item_id and item_id in resolved_ids:
+            continue
+        kept.append(item)
+    return kept
 
 
 def advance_critic_queue(
@@ -1948,21 +1998,12 @@ def advance_critic_queue(
         return {"ok": False, "reason": "critic-queue missing"}
 
     resolved = {str(i) for i in (mark_resolved_ids or [])}
+    # 预演 kept 以确定目标阶段与验收门槛；队列改写委托给 CriticQueue（G4）。
     pending = critic_queue.get("pending_items") or []
     if not isinstance(pending, list):
         pending = []
-    kept = []
-    for item in pending:
-        if not isinstance(item, dict):
-            continue
-        item_id = str(item.get("id") or item.get("dimension") or "")
-        if item_id and item_id in resolved:
-            continue
-        kept.append(item)
-    critic_queue["pending_items"] = kept
+    kept = _filter_critic_pending(pending, resolved)
     queue_round = critic_queue.get("round")
-    if increment_round:
-        critic_queue["round"] = int(critic_queue.get("round") or 1) + 1
 
     config_path = _review_path(git_root, CONFIG_FILE)
     config = _read_json_file(config_path) or {}
@@ -1984,21 +2025,20 @@ def advance_critic_queue(
         if not debate_ok:
             return {"ok": False, "reason": f"debate report invalid: {debate_msg}"}
 
-    if not kept:
-        critic_q.delete()
-        action = "deleted"
-    else:
-        critic_q.save(critic_queue)
-        action = "updated"
-
     progress_path = _review_path(git_root, PROGRESS_FILE)
     progress = _read_json_file(progress_path) or {}
     target_phase = "revise" if kept else "accepted"
     current_phase = str(progress.get("phase") or "")
+    # G5: 阶段迁移先于队列落盘；迁移抛错时队列文件保持原样。
     if current_phase != target_phase:
         safe_transition_phase(git_root, "map-hyperplan", target_phase)
-    progress = _read_json_file(progress_path) or {}
 
+    critic_q.resolve_ids(resolved)
+    action = "updated" if kept else "deleted"
+    if increment_round and kept:
+        critic_q.increment_round()
+
+    progress = _read_json_file(progress_path) or {}
     result: dict[str, Any] = {
         "ok": True,
         "queue_action": action,
@@ -2007,17 +2047,16 @@ def advance_critic_queue(
     }
 
     if not kept:
-        config_path = _review_path(git_root, CONFIG_FILE)
-        config = _read_json_file(config_path)
-        if config and str(config.get("workflow") or "") == "map-hyperplan":
+        fresh_config = _read_json_file(config_path)
+        if fresh_config and str(fresh_config.get("workflow") or "") == "map-hyperplan":
             queue_session_id = critic_queue.get("session_id")
-            config_session_id = config.get("session_id")
+            config_session_id = fresh_config.get("session_id")
             if queue_session_id and queue_session_id != config_session_id:
                 result["deactivate_skipped"] = "session_mismatch"
             else:
-                config["active"] = False
-                config["deactivated_at"] = _now_iso()
-                _write_json_file(config_path, config)
+                fresh_config["active"] = False
+                fresh_config["deactivated_at"] = _now_iso()
+                _write_json_file(config_path, fresh_config)
                 result["deactivated"] = True
 
     return result
@@ -2633,6 +2672,32 @@ def _role_for_permission(ctx: dict[str, Any], data: dict[str, Any]) -> tuple[str
     return role, role_data
 
 
+def _is_root_transcript_path(transcript: str) -> bool:
+    """True only for the genuine Cursor root-conversation transcript shape.
+
+    G3: 根会话 transcript 形态为
+    ``<Cursor projects 目录>/agent-transcripts/<id>/<id>.jsonl``
+    （文件名去掉 .jsonl 必须与父目录同名，且位于 .cursor/projects 之下）；
+    含 /subagents/ 的是子代理，/tmp 之类的任意路径一律不算 Commander。
+    """
+    norm = transcript.replace("\\", "/")
+    if "/subagents/" in norm:
+        return False
+    parts = [p for p in norm.split("/") if p]
+    if len(parts) < 6 or parts[-3] != "agent-transcripts":
+        return False
+    filename = parts[-1]
+    if not filename.endswith(".jsonl"):
+        return False
+    if filename[: -len(".jsonl")] != parts[-2]:
+        return False
+    prefix = parts[:-3]
+    return any(
+        prefix[i] == ".cursor" and prefix[i + 1] == "projects"
+        for i in range(len(prefix) - 1)
+    )
+
+
 def _is_commander_session(data: dict[str, Any]) -> bool:
     """True for the parent Commander session (not a subagent transcript)."""
     _, _, subagent_id = _extract_subagent_fields(data)
@@ -2641,7 +2706,7 @@ def _is_commander_session(data: dict[str, Any]) -> bool:
     transcript = _extract_transcript_path(data)
     if not transcript:
         return False
-    return "/subagents/" not in transcript.replace("\\", "/")
+    return _is_root_transcript_path(transcript)
 
 
 def check_tool_permission_from_hook(data: dict[str, Any]) -> dict[str, Any]:
@@ -2987,6 +3052,9 @@ def _tokenize_mcp_tool_name(tool_name: str) -> list[str]:
 
 
 def _mcp_tool_is_write(tool_name: str) -> bool:
+    # 已知限制：全小写连写的动词（如 "createpage"）没有分隔符或 camelCase 边界，
+    # 分词后不会命中动词表，因此这类工具名识别不到写语义；
+    # 该门仅是防御纵深的一层，最终仍以角色 Write/Delete 权限为兜底。
     return any(token in _MCP_WRITE_VERBS for token in _tokenize_mcp_tool_name(tool_name))
 
 

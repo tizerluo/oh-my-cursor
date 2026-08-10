@@ -80,23 +80,44 @@ class AdvanceFixQueuePhaseTests(unittest.TestCase):
                 rg.advance_fix_queue(root, mark_resolved_ids=["a"])
                 mock_transition.assert_not_called()
 
-    def test_uses_fix_queue_class(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / ".review").mkdir()
-            (root / ".review/fix-queue.json").write_text(
-                json.dumps(
-                    {
-                        "p0_issues": [{"id": "a"}, {"id": "b"}],
-                        "p1_issues": [],
-                    }
-                )
+    def _make_fix_root(self, tmp, phase: str = "synthesis-complete") -> Path:
+        """构造 fix queue 夹具；默认阶段已在目标相位，隔离阶段迁移干扰。"""
+        root = Path(tmp)
+        (root / ".review").mkdir()
+        (root / ".review/fix-queue.json").write_text(
+            json.dumps(
+                {
+                    "p0_issues": [{"id": "a"}, {"id": "b"}],
+                    "p1_issues": [],
+                    "round": 1,
+                }
             )
-            (root / ".review/config.json").write_text(json.dumps({"workflow": "multi-agent-pr"}))
-            (root / ".review/progress.json").write_text(json.dumps({"phase": "fix-round-1"}))
-            with patch.object(rg.FixQueue, "save", wraps=rg.FixQueue(root).save) as mock_save:
-                rg.advance_fix_queue(root, mark_resolved_ids=["a"])
-                self.assertEqual(mock_save.call_count, 1)
+        )
+        (root / ".review/config.json").write_text(json.dumps({"workflow": "multi-agent-pr"}))
+        (root / ".review/progress.json").write_text(json.dumps({"phase": phase}))
+        return root
+
+    def test_fix_advance_delegates_resolve_to_queue_class(self):
+        """G4: 若生产路径绕开 FixQueue.resolve_ids 内联过滤，本测试必须失败。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._make_fix_root(tmp)
+
+            def _boom(self_q, resolved_ids):
+                raise AssertionError("FixQueue.resolve_ids was bypassed")
+
+            with patch.object(rg.FixQueue, "resolve_ids", _boom):
+                with self.assertRaises(AssertionError):
+                    rg.advance_fix_queue(root, mark_resolved_ids=["a"])
+
+    def test_fix_advance_delegates_round_to_queue_class(self):
+        """G4: 轮次自增必须使用 FixQueue.increment_round 的返回值。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._make_fix_root(tmp)
+            with patch.object(rg.FixQueue, "increment_round", return_value=99) as mock_inc:
+                result = rg.advance_fix_queue(root, mark_resolved_ids=["a"], increment_round=True)
+            mock_inc.assert_called_once()
+            self.assertEqual(result["queue_round"], 99)
+            self.assertEqual(result["round"], 99)
 
 
 class AdvanceCriticQueuePhaseTests(unittest.TestCase):
@@ -112,17 +133,72 @@ class AdvanceCriticQueuePhaseTests(unittest.TestCase):
                 rg.advance_critic_queue(root, mark_resolved_ids=["other"])
                 mock_transition.assert_not_called()
 
-    def test_uses_critic_queue_class(self):
+    def test_critic_advance_delegates_resolve_to_queue_class(self):
+        """G4: 若生产路径绕开 CriticQueue.resolve_ids 内联过滤，本测试必须失败。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".review").mkdir()
+            (root / ".review/critic-queue.json").write_text(
+                json.dumps({"pending_items": [{"id": "sec"}, {"id": "perf"}]})
+            )
+            # 阶段已在目标相位（kept 非空 → revise），隔离阶段迁移干扰
+            (root / ".review/progress.json").write_text(json.dumps({"phase": "revise"}))
+            with patch.object(
+                rg.CriticQueue, "resolve_ids", side_effect=AssertionError("bypassed")
+            ):
+                with self.assertRaises(AssertionError):
+                    rg.advance_critic_queue(root, mark_resolved_ids=["sec"])
+
+    def test_critic_advance_delegates_round_to_queue_class(self):
+        """G4: critic 轮次自增必须走 CriticQueue.increment_round。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".review").mkdir()
+            (root / ".review/critic-queue.json").write_text(
+                json.dumps({"pending_items": [{"id": "sec"}, {"id": "perf"}], "round": 1})
+            )
+            (root / ".review/progress.json").write_text(json.dumps({"phase": "revise"}))
+            with patch.object(rg.CriticQueue, "increment_round", return_value=42) as mock_inc:
+                result = rg.advance_critic_queue(
+                    root, mark_resolved_ids=["sec"], increment_round=True
+                )
+            mock_inc.assert_called_once()
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["pending_remaining"], 1)
+
+
+class AdvanceQueueOrderingTests(unittest.TestCase):
+    """G5: safe_transition_phase 抛错时，队列文件必须保持原样（先迁移后落盘）。"""
+
+    def test_fix_queue_intact_when_phase_transition_raises(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".review").mkdir()
+            queue_payload = {"p0_issues": [{"id": "a"}], "p1_issues": [], "round": 1}
+            (root / ".review/fix-queue.json").write_text(json.dumps(queue_payload))
+            (root / ".review/config.json").write_text(json.dumps({"workflow": "multi-agent-pr"}))
+            # coding -> synthesis-complete 不是合法迁移，必然抛 PhaseTransitionError
+            (root / ".review/progress.json").write_text(json.dumps({"phase": "coding"}))
+            before = (root / ".review/fix-queue.json").read_text(encoding="utf-8")
+            with self.assertRaises(rg.PhaseTransitionError):
+                rg.advance_fix_queue(root, mark_resolved_ids=["a"])
+            after = (root / ".review/fix-queue.json").read_text(encoding="utf-8")
+            self.assertEqual(before, after)
+
+    def test_critic_queue_intact_when_phase_transition_raises(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".review").mkdir()
             (root / ".review/critic-queue.json").write_text(
                 json.dumps({"pending_items": [{"id": "sec"}]})
             )
-            (root / ".review/progress.json").write_text(json.dumps({"phase": "debate"}))
-            with patch.object(rg.CriticQueue, "save", wraps=rg.CriticQueue(root).save) as mock_save:
-                rg.advance_critic_queue(root, mark_resolved_ids=["other"])
-                self.assertEqual(mock_save.call_count, 1)
+            # accepted 没有出边；kept 非空时目标相位是 revise，必然抛错
+            (root / ".review/progress.json").write_text(json.dumps({"phase": "accepted"}))
+            before = (root / ".review/critic-queue.json").read_text(encoding="utf-8")
+            with self.assertRaises(rg.PhaseTransitionError):
+                rg.advance_critic_queue(root, mark_resolved_ids=[])
+            after = (root / ".review/critic-queue.json").read_text(encoding="utf-8")
+            self.assertEqual(before, after)
 
 
 class McpTokenWriteTests(unittest.TestCase):
@@ -242,12 +318,17 @@ class CommanderPermissionTests(SecretBootstrapMixin, unittest.TestCase):
         self._tmp.cleanup()
         self._clear_secret_env()
 
-    def _commander_payload(self, path: str) -> dict:
+    def _commander_payload(self, path: str, transcript: str | None = None) -> dict:
+        # 真实根会话 transcript 形状：.../.cursor/projects/<slug>/agent-transcripts/<id>/<id>.jsonl
+        if transcript is None:
+            transcript = (
+                "/Users/me/.cursor/projects/foo/agent-transcripts/abc/abc.jsonl"
+            )
         return {
             "cwd": str(self.root),
             "tool_name": "Write",
             "tool_input": {"path": path},
-            "transcript_path": "/Users/me/.cursor/projects/foo/agent-transcripts/abc.jsonl",
+            "transcript_path": transcript,
         }
 
     def test_commander_allowed_review_write(self):
@@ -262,6 +343,25 @@ class CommanderPermissionTests(SecretBootstrapMixin, unittest.TestCase):
         )
         self.assertEqual(result["permission"], "deny")
         self.assertIn("Commander", result.get("user_message", ""))
+
+    def test_tmp_transcript_not_commander_denied_review_write(self):
+        """G3: /tmp 下的任意 transcript 不得被当作 Commander（.review/ 写拒绝）。"""
+        result = rg.check_tool_permission_from_hook(
+            self._commander_payload(
+                ".review/verdict.json", transcript="/tmp/transcript.jsonl"
+            )
+        )
+        self.assertEqual(result["permission"], "deny")
+
+    def test_mismatched_stem_transcript_denied_review_write(self):
+        """G3: 文件名与父目录不同名的 transcript 不算根会话。"""
+        result = rg.check_tool_permission_from_hook(
+            self._commander_payload(
+                ".review/verdict.json",
+                transcript="/Users/me/.cursor/projects/foo/agent-transcripts/abc/def.jsonl",
+            )
+        )
+        self.assertEqual(result["permission"], "deny")
 
     def test_subagent_without_role_denied_everywhere(self):
         data = {

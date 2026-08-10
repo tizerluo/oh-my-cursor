@@ -60,10 +60,14 @@ class SubagentTypeNormalizationTests(SecretBootstrapMixin, unittest.TestCase):
         self.tmp = Path(self._tmpdir.name)
         self._bootstrap_secret(self.rg)
         self.cache_file = self.tmp / "workspace-cache.json"
-        os.environ["OMC_WORKSPACE_CACHE_FILE"] = str(self.cache_file)
+        # P2: patch.dict 自动保存/恢复宿主环境变量，避免测试间/外部环境串扰
+        self._env_patch = patch.dict(
+            os.environ, {"OMC_WORKSPACE_CACHE_FILE": str(self.cache_file)}
+        )
+        self._env_patch.start()
 
     def tearDown(self):
-        os.environ.pop("OMC_WORKSPACE_CACHE_FILE", None)
+        self._env_patch.stop()
         self._clear_secret_env()
         self._tmpdir.cleanup()
 

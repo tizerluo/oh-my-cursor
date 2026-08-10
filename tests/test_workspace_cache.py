@@ -61,10 +61,14 @@ class WorkspaceCacheTests(SecretBootstrapMixin, unittest.TestCase):
         self.tmp = Path(self._tmpdir.name)
         self._bootstrap_secret(self.rg)
         self.cache_file = self.tmp / "workspace-cache.json"
-        os.environ["OMC_WORKSPACE_CACHE_FILE"] = str(self.cache_file)
+        # P2: patch.dict 自动保存/恢复宿主环境变量，避免测试间/外部环境串扰
+        self._env_patch = patch.dict(
+            os.environ, {"OMC_WORKSPACE_CACHE_FILE": str(self.cache_file)}
+        )
+        self._env_patch.start()
 
     def tearDown(self):
-        os.environ.pop("OMC_WORKSPACE_CACHE_FILE", None)
+        self._env_patch.stop()
         self._clear_secret_env()
         self._tmpdir.cleanup()
 
@@ -148,6 +152,77 @@ class WorkspaceCacheTests(SecretBootstrapMixin, unittest.TestCase):
         self.assertNotIn(conv_old, entries)
         self.assertIn(conv_new, entries)
         self.assertIn("fresh-write", entries)
+
+    def test_getcwd_fallback_does_not_poison_cache(self):
+        """G2 复现：缓存已记住好仓库时，空 roots 事件 + getcwd 落在另一个
+        git 仓库，必须解析到好仓库，且缓存文件内容保持原样。"""
+        good = self.tmp / "good-repo"
+        good.mkdir()
+        _init_git_repo(good)
+        bad = self.tmp / "bad-repo"
+        bad.mkdir()
+        _init_git_repo(bad, branch="bad-branch")
+        conv_id = "g2-poison-repro"
+        _prime_cache(self.rg, self.cache_file, conv_id, good)
+        before = self.cache_file.read_text(encoding="utf-8")
+
+        data = {
+            "conversation_id": conv_id,
+            "hook_event_name": "subagentStop",
+            "workspace_roots": [],
+        }
+        with patch.object(self.rg.os, "getcwd", return_value=str(bad)):
+            ctx = self.rg.load_map_context(data)
+
+        self.assertIsNotNone(ctx)
+        self.assertEqual(ctx["git_root"].resolve(), good.resolve())
+        self.assertEqual(self.cache_file.read_text(encoding="utf-8"), before)
+
+    def test_getcwd_last_resort_without_cache_never_upserts(self):
+        """G2(a)：无缓存条目时 getcwd 仅作最后手段解析，绝不回写缓存。"""
+        repo = self.tmp / "repo-getcwd"
+        repo.mkdir()
+        _init_git_repo(repo)
+        conv_id = "g2-getcwd-no-upsert"
+        data = {"conversation_id": conv_id, "workspace_roots": []}
+        with patch.object(self.rg.os, "getcwd", return_value=str(repo)):
+            ctx = self.rg.load_map_context(data)
+        self.assertIsNotNone(ctx)
+        self.assertEqual(ctx["git_root"].resolve(), repo.resolve())
+        if self.cache_file.exists():
+            cache = json.loads(self.cache_file.read_text(encoding="utf-8"))
+            self.assertNotIn(conv_id, cache.get("entries", {}))
+
+    def test_stale_entry_ignored_on_read(self):
+        """G2(c)：超过 7 天 TTL 的缓存条目在读取时即被忽略。"""
+        repo = self.tmp / "repo-stale"
+        repo.mkdir()
+        _init_git_repo(repo)
+        conv_id = "g2-stale-read"
+        stale_ts = (
+            (datetime.now(timezone.utc) - timedelta(days=8))
+            .replace(microsecond=0)
+            .isoformat()
+        )
+        self.cache_file.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "entries": {
+                        conv_id: {
+                            "root": str(repo.resolve()),
+                            "updated_at": stale_ts,
+                        }
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        self.assertIsNone(self.rg._lookup_workspace_cache(conv_id))
+        data = {"conversation_id": conv_id, "workspace_roots": []}
+        with patch.object(self.rg.os, "getcwd", return_value=str(self.tmp / "fake-cursor")):
+            self.assertIsNone(self.rg.load_map_context(data))
 
     def test_pre_tool_use_updates_cache_from_workspace_roots(self):
         repo = self.tmp / "repo_pretool"
