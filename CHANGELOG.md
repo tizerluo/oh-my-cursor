@@ -6,6 +6,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **v1.3.1 follow-ups (#22):** Cursor 3.15 role lifecycle (active-scan, Commander-first, empty-role Shell deny, StrReplace/MCP shared lookup); doctor `hooks.json` `version` must be integer `1`; `requirements-dev.txt` + `hooks/run_ci_local.sh`; `merge-ready → fix-round-*` recovery; map-refactor terminal phases `merged`/`cleanup`
+- Docs: cloud-agent hook limitation; README/CHANGELOG test counts; map-refactor pipeline through `cleanup`
+
 ## [1.3.0] - 2026-08-10
 
 ### Added
@@ -18,7 +23,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Cursor 3.15 compat** — workspace cache for subagent lifecycle payloads with empty `workspace_roots`; tolerant case/underscore matchers on `subagentStart` / `subagentStop`; `general-purpose` → `generalPurpose` normalization (F2, F12)
 - **Install doctor** — validates `hooks/config/models.json` and reviewer model keys (F9)
 - **CI** — ruff + mypy (fail-closed), install smoke with `doctor --security`, `py_compile`, stale-path scan (F6)
-- **87+ new tests** (140 → 266 via `hooks/run_tests.sh`), covering phase transitions, queues, compact-inject, MCP permission, workspace cache, subagent type normalization
+- **87+ new tests** at tag time (140 → 266 via `hooks/run_tests.sh`); current `main` is **302** after v1.3.1 follow-ups — covering phase transitions, queues, compact-inject, MCP permission, workspace cache, subagent type normalization, role lifecycle
 
 ### Changed
 

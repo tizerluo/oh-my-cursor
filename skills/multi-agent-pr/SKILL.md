@@ -389,6 +389,8 @@ Hotfix may skip this step only when Architect was skipped.
 
 
 > **Cursor 3.15+ — foreground subagents only:** The platform never fires `subagentStop` for **background** subagents (`run_in_background=true`). MAP merge-gate markers are recorded only on `subagentStop`, so **every** MAP subagent spawn (Coder, Architect, Tester, Reviewers) **MUST** use `run_in_background=false`. Foreground spawns are required for hook-recorded session markers under `.review/session/`.
+>
+> **Upstream watch:** Cursor also documents that `subagentStop` payloads may omit `summary` / `modified_files` and often carry `agent_transcript_path: null` — MAP works around this via the workspace cache (F2). Re-evaluate background spawns and cache simplification when upstream fixes land. Forum: https://forum.cursor.com/t/subagentstop-never-fires-for-background-subagents-documented-summary-modified-files-agent-transcript-path-missing-or-null/166681
 
 Launch foreground subagent (required on Cursor 3.15+):
 

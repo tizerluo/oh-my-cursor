@@ -15,10 +15,13 @@ description: >-
 ## Pipeline
 
 ```
-config-confirmed → analysis → baseline → implement → regression → review-pending → synthesis-complete
+config-confirmed → analysis → baseline → implement → regression
+  → review-pending → synthesis-complete → merge-ready → merged → cleanup
 ```
 
-See [multi-agent-pr SKILL §8b](../multi-agent-pr/SKILL.md) for Commander steps.
+CI / late failure recovery (same as multi-agent-pr): `merge-ready → fix-round-N → regression → …` (not a direct jump to `review-pending`).
+
+See [multi-agent-pr SKILL §8](../multi-agent-pr/SKILL.md) for Commander steps and fix-round advance.
 
 ## Regression + flaky handling
 

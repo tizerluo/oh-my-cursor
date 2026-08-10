@@ -7,9 +7,9 @@ Independent, versioned **MAP (Multi-Agent Protocol)** engine for Cursor — hook
 ## Status
 
 - **Repository:** Public — [github.com/tizerluo/oh-my-cursor](https://github.com/tizerluo/oh-my-cursor)
-- **Version:** [v1.2](https://github.com/tizerluo/oh-my-cursor/releases/tag/v1.2) (see [CHANGELOG.md](CHANGELOG.md))
+- **Version:** [v1.3.0](https://github.com/tizerluo/oh-my-cursor/releases/tag/v1.3.0) (see [CHANGELOG.md](CHANGELOG.md); v1.3.1 follow-ups on `main`)
 - **Spec:** [`.specs/oh-my-cursor.md`](.specs/oh-my-cursor.md) (accepted via map-hyperplan)
-- **Tests:** 140+ via [`hooks/run_tests.sh`](hooks/run_tests.sh)
+- **Tests:** 302 via [`hooks/run_tests.sh`](hooks/run_tests.sh)
 - **Live Spike:** Cursor 3.7.19+ — [docs/spike-verification.md](docs/spike-verification.md)
 - **Security:** [Private vulnerability reporting](https://github.com/tizerluo/oh-my-cursor/security/advisories/new) enabled — see [SECURITY.md](SECURITY.md)
 
@@ -51,7 +51,9 @@ chmod +x install.sh
 python3 scripts/install.py --doctor --security
 ```
 
-No external pip dependencies — Python 3 stdlib only.
+Hook **runtime** needs Python 3 stdlib only (no pip). Lint/typecheck/coverage for contributors use [`requirements-dev.txt`](requirements-dev.txt) — see [Development](#development).
+
+**Cloud agents:** Cursor cloud VMs do **not** load user-level `~/.cursor/hooks.json`. MAP merge-gate / permission hooks therefore do not run in cloud sessions unless you install **project-level** hooks (e.g. `./install.sh --project /path/to/repo`) or use team/enterprise hooks. Prefer `--project` for any cloud-agent workflow. Details: [docs/install.md](docs/install.md).
 
 Details: [docs/install.md](docs/install.md) · [docs/security.md](docs/security.md) · [docs/state-migration.md](docs/state-migration.md) · [docs/integrations/issue-to-pr.md](docs/integrations/issue-to-pr.md)
 
@@ -399,12 +401,22 @@ Further install and CI detail: [docs/architecture.md](docs/architecture.md)
 
 ## Development
 
+Zero-dep tests (stdlib only):
+
 ```bash
 ./hooks/run_tests.sh
 ./scripts/ci_check_stale_paths.sh
 ```
 
-CI: [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — tests, compile check, install smoke, stale-path grep.
+Full local CI mirror (pins from [`requirements-dev.txt`](requirements-dev.txt): ruff, mypy, coverage):
+
+```bash
+./hooks/run_ci_local.sh
+```
+
+`mypy` in CI / `run_ci_local.sh` checks **`hooks/review_gate.py` only** (acceptable scope today; extend if `scripts/` gains gate logic).
+
+CI: [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — ruff, mypy, tests, coverage, compile check, install smoke, stale-path grep.
 
 ## License
 

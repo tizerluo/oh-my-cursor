@@ -4,8 +4,20 @@ Install MAP hooks, skills, and agents into Cursor configuration.
 
 ## Requirements
 
-- Python 3 (stdlib only — no pip dependencies)
-- Cursor with hooks support (3.7.19+ verified for subagentStop)
+- Python 3 (hook **runtime** is stdlib only — no pip)
+- Cursor with hooks support (3.7.19+ verified for subagentStop; 3.15.x role lifecycle verified — see [spike-verification.md](spike-verification.md))
+
+## Cloud agents and hook scope
+
+Cursor **cloud agents** run in VMs that do **not** load user-level `~/.cursor/hooks.json` (home directory hooks are unavailable there). Only **project**, **team**, or **enterprise** hooks apply.
+
+If you need MAP merge-gate / permission enforcement for cloud-agent sessions:
+
+```bash
+./install.sh --project /path/to/consumer-repo
+```
+
+That installs into `consumer-repo/.cursor/` (copy mode). Global `./install.sh --copy` (→ `~/.cursor`) is fine for local Desktop Cursor, but does **not** protect cloud runs.
 
 ## Pin a release
 
