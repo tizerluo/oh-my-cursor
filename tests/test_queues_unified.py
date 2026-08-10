@@ -172,6 +172,21 @@ class SecurityQueueTests(unittest.TestCase):
         fps = q.existing_fingerprints()
         self.assertEqual(len(fps), 1)
 
+    def test_existing_fingerprints_filters_invalid_values(self):
+        q = self.rg.SecurityQueue(self.root)
+        q.save(
+            {
+                "pending_findings": [
+                    {"fingerprint": "valid"},
+                    {"fingerprint": ""},
+                    {"fingerprint": None},
+                    {"fingerprint": True},
+                    {},
+                ]
+            }
+        )
+        self.assertEqual(q.existing_fingerprints(), {"valid"})
+
 
 class QueueManagerCommonTests(unittest.TestCase):
     def setUp(self):

@@ -70,6 +70,25 @@ class PhaseTransitionValidationTests(unittest.TestCase):
             self.rg.validate_phase_transition("map-refactor", "regression", "fix-round-1")
         )
 
+    def test_merge_ready_can_recover_to_fix_round(self):
+        for workflow in ("multi-agent-pr", "map-refactor"):
+            with self.subTest(workflow=workflow):
+                self.assertTrue(
+                    self.rg.validate_phase_transition(workflow, "merge-ready", "fix-round-2")
+                )
+
+    def test_merge_ready_cannot_return_directly_to_review_pending(self):
+        for workflow in ("multi-agent-pr", "map-refactor"):
+            with self.subTest(workflow=workflow):
+                self.assertFalse(
+                    self.rg.validate_phase_transition(workflow, "merge-ready", "review-pending")
+                )
+
+    def test_refactor_terminal_phases_are_registered(self):
+        phases = self.rg.WORKFLOW_PHASES["map-refactor"]
+        self.assertIn("merged", phases)
+        self.assertIn("cleanup", phases)
+
     def test_unknown_workflow_allows_any(self):
         self.assertTrue(
             self.rg.validate_phase_transition("unknown-workflow", "any-phase", "other-phase")

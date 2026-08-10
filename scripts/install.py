@@ -163,6 +163,13 @@ def merge_hooks(
 ) -> dict[str, Any]:
     """Merge MAP hook entries; preserve all non-MAP entries unchanged."""
     merged = json.loads(json.dumps(existing))
+    version = merged.get("version")
+    if "version" not in merged or version == "1":
+        # 仅兼容缺失版本与历史字符串 "1"，其他异常值必须显式拒绝。
+        merged["version"] = 1
+    elif type(version) is not int or version != 1:
+        raise InstallError("hooks.json: version must be integer 1")
+
     existing_hooks = merged.get("hooks")
     if existing_hooks is None:
         existing_hooks = {}
@@ -192,7 +199,6 @@ def merge_hooks(
                 raise InstallError(f"MAP template: hooks.{event} must be an array")
             existing_hooks[event] = list(map_entries)
 
-    merged.setdefault("version", map_hooks.get("version", 1))
     return merged
 
 
@@ -518,6 +524,11 @@ def run_doctor(cursor_dir: Path | None = None, *, security: bool = False) -> int
     hooks_json = cursor / "hooks.json"
     if hooks_json.is_file():
         data = load_json(hooks_json)
+        version = data.get("version")
+        if type(version) is not int or version != 1:
+            issues.append("hooks.json: version must be integer 1")
+        else:
+            ok.append("hooks.json: version is integer 1")
         expected_count = expected_map_hook_count(gate if gate.is_file() else None)
         map_count = sum(
             1

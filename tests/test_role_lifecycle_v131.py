@@ -191,6 +191,16 @@ class RoleLifecycleTests(unittest.TestCase):
         }
         self.assertFalse(self.rg._is_commander_session(data))
 
+    def test_extract_transcript_path_accepts_agent_aliases(self) -> None:
+        self.assertEqual(
+            self.rg._extract_transcript_path({"agent_transcript_path": "/tmp/a.jsonl"}),
+            "/tmp/a.jsonl",
+        )
+        self.assertEqual(
+            self.rg._extract_transcript_path({"agentTranscriptPath": "/tmp/b.jsonl"}),
+            "/tmp/b.jsonl",
+        )
+
 
     def test_prompt_cannot_elevate_config_explore_to_coder(self) -> None:
         """config 已映射 explore 时，prompt 不得提权为 coder。"""

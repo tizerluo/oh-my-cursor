@@ -18,7 +18,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install tools
-        run: pip install ruff mypy coverage
+        run: pip install -r requirements-dev.txt
 
       - name: Lint
         run: ruff check hooks/ tests/ scripts/ --select E,F,W --ignore E501

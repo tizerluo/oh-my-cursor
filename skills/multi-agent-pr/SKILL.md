@@ -308,6 +308,8 @@ config-confirmed → spec-writing → architect-review → adjudication
   → [P0/P1 = 0] merge-ready → merged → cleanup
 ```
 
+If CI regresses after `merge-ready`, recover through `merge-ready → fix-round-N → review-pending`.
+
 When P0/P1 > 0 after synthesis: write fix-queue, keep phase at `synthesis-complete`.
 Stop hook may emit a followup reminder at `synthesis-complete`; Commander drives fix-round manually.
 Do **not** expect stop hook to advance `phase` to `fix-round-N`.

@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 HOOKS_DIR = Path(__file__).resolve().parents[1] / "hooks"
 sys.path.insert(0, str(HOOKS_DIR))
@@ -479,6 +480,31 @@ class SecurityFingerprintTests(unittest.TestCase):
             self.assertEqual(n, 1)
             queue = json.loads((root / ".review/security-queue.json").read_text())
             self.assertEqual(len(queue["pending_findings"]), 1)
+
+    def test_public_append_ignores_dirty_existing_fingerprints(self):
+        """公开入口去重时只接受非空字符串指纹。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".review").mkdir()
+            (root / ".review/security-queue.json").write_text(
+                json.dumps(
+                    {
+                        "pending_findings": [
+                            {"fingerprint": None},
+                            {"fingerprint": ""},
+                            {"fingerprint": True},
+                        ]
+                    }
+                )
+            )
+            finding = {"asset": "api", "vuln_class": "xss", "severity": "high"}
+            with patch.object(rg, "security_fingerprint", return_value=True):
+                added = rg.append_unverified_findings_to_security_queue(
+                    root, [finding], session_id="s1"
+                )
+            self.assertEqual(added, 1)
+            queue = json.loads((root / ".review/security-queue.json").read_text())
+            self.assertEqual(len(queue["pending_findings"]), 4)
 
 
 class RegressionTests(unittest.TestCase):

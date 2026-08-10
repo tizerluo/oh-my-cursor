@@ -1,5 +1,32 @@
 # Progress Log
 
+## 2026-08-10 — PR-A2 runtime hygiene（fix/v1.3.1-runtime-hygiene）
+
+### 我们实现了哪些功能？
+
+1. `scripts/install.py` 的 doctor 严格要求 `hooks.json.version` 为非 bool 的整数 `1`；合并逻辑仅迁移缺失版本和字符串 `"1"`，拒绝其他值。
+2. 新增固定版本的 `requirements-dev.txt`，CI 改为从该文件安装，并新增可执行的 `hooks/run_ci_local.sh`；`run_tests.sh` 继续保持零依赖。
+3. `multi-agent-pr` 与 `map-refactor` 支持从 `merge-ready` 回退到 `fix-round-N`，修复轮统一返回 `review-pending`；补齐 map-refactor 终态。
+4. 安全队列指纹集合仅接受非空字符串；删除未使用的 `_extract_cwd`，并兼容 `agent_transcript_path` 两种载荷别名。
+5. 为版本边界、状态恢复、终态、指纹过滤和 transcript 别名补充回归测试。
+
+### 我们遇到了哪些错误？
+
+1. 首轮全量测试中，`advance_fix_queue` 仍将修复轮推进到 `synthesis-complete`，与新状态机契约冲突并触发 `PhaseTransitionError`。
+2. 当前 shell 中的 `mypy` 命令不可用且包装层返回了误导性的 “No issues found” 与非零退出码；本机 ruff 版本也不是 A2 固定版本。
+
+### 我们是如何解决这些错误的？
+
+1. 将两种修复工作流的队列推进目标统一改为 `review-pending`，同步更新旧测试与阶段说明，确保修复后必须重新评审。
+2. 在 `/tmp` 创建隔离虚拟环境并从 `requirements-dev.txt` 安装固定版本，使用 mypy 2.3.0 与 ruff 0.16.2 完成真实验证。
+
+### 验证
+
+- `bash hooks/run_tests.sh`：全量通过。
+- 固定版本 `ruff check hooks/ tests/ scripts/ --select E,F,W --ignore E501`：通过。
+- 固定版本 `mypy hooks/review_gate.py --ignore-missing-imports --no-error-summary`：通过。
+- `python3 -m py_compile scripts/install.py hooks/review_gate.py`：通过。
+
 ## 2026-08-10 — 公开前修复计划收尾（Public Release Fixes）
 
 ### 我们实现了哪些功能？
@@ -109,4 +136,30 @@
 ### 我们是如何解决这些错误的？
 
 - 改用 Shell + Python 精确字符串替换完成编辑；`bash hooks/run_tests.sh` 全绿（含新增用例）。
+
+## 2026-08-10 — A2 R1 review gaps（fix/v1.3.1-runtime-hygiene）
+
+### 我们实现了哪些功能？
+
+- 公开安全队列追加函数统一委托 `SecurityQueue.append_findings`，确保既有指纹只接受非空字符串，并新增 `None`、空字符串和布尔值脏数据回归测试。
+- 恢复主分支修复轮语义：multi-agent-pr 回到 `synthesis-complete`，map-refactor 回到 `regression`；仅保留两个工作流的 `merge-ready → fix-round-*` 恢复路径。
+- 新增 `merge-ready → review-pending` 非法迁移测试，并保留 map-refactor 的 `merged`、`cleanup` 阶段注册。
+- 本地 CI 脚本改用 `python3 -m ruff` 和 `python3 -m mypy`，避免依赖 PATH 中的裸命令。
+
+### 我们遇到了哪些错误？
+
+- 首次定向测试缺少 `patch` 导入，且直接以包路径执行部分测试时未设置 `tests` 到 `PYTHONPATH`。
+- 恢复阶段目标后，`test_review_gate.py` 仍残留 `review-pending` 旧期望，导致完整测试首次运行失败。
+- 当前解释器未安装可导入的 mypy；`python3 -m mypy` 虽输出 “No issues found”，但进程退出码为 1。
+
+### 我们是如何解决这些错误的？
+
+- 补充 `unittest.mock.patch` 导入，并使用 `PYTHONPATH=tests` 重跑定向测试。
+- 对照 main 恢复残留断言为 `synthesis-complete`，随后完整测试套件通过。
+
+### 验证
+
+- `bash hooks/run_tests.sh`：全部通过。
+- `python3 -m ruff check hooks/ tests/ scripts/ --select E,F,W --ignore E501`：全部通过。
+- `python3 -m mypy hooks/review_gate.py --ignore-missing-imports --no-error-summary`：输出无问题，但本机因 mypy 模块缺失退出 1；CI 脚本会先从 `requirements-dev.txt` 安装依赖。
 

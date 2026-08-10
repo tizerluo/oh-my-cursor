@@ -17,7 +17,7 @@ import hmac
 import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, NoReturn, cast
+from typing import Any, NoReturn
 
 SESSION_DIR = ".review-session"
 SESSION_FILE = ".review-session.json"
@@ -467,6 +467,8 @@ WORKFLOW_PHASES: dict[str, list[str]] = {
         "review-pending",
         "synthesis-complete",
         "merge-ready",
+        "merged",
+        "cleanup",
     ],
 }
 
@@ -488,7 +490,7 @@ VALID_TRANSITIONS: dict[str, dict[str, list[str]]] = {
         "review-pending": ["synthesis-complete"],
         "synthesis-complete": ["fix-round-*", "merge-ready", "synthesis-complete"],
         "fix-round-*": ["synthesis-complete", "review-pending"],
-        "merge-ready": ["merged", "cleanup"],
+        "merge-ready": ["merged", "cleanup", "fix-round-*"],
     },
     "map-hyperplan": {
         "config-confirmed": ["draft"],
@@ -513,7 +515,7 @@ VALID_TRANSITIONS: dict[str, dict[str, list[str]]] = {
         "fix-round-*": ["regression"],
         "review-pending": ["synthesis-complete"],
         "synthesis-complete": ["merge-ready", "fix-round-*", "synthesis-complete"],
-        "merge-ready": ["merged", "cleanup"],
+        "merge-ready": ["merged", "cleanup", "fix-round-*"],
     },
 }
 
@@ -703,13 +705,6 @@ def _extract_explicit_cwd(data: dict[str, Any]) -> str:
     return ""
 
 
-def _extract_cwd(data: dict[str, Any]) -> str:
-    explicit = _extract_explicit_cwd(data)
-    if explicit:
-        return explicit
-    return os.getcwd()
-
-
 def _extract_subagent_fields(data: dict[str, Any]) -> tuple[str, str, str]:
     subagent_type = ""
     for key in ("subagent_type", "subagentType", "agent_type", "agentType", "type"):
@@ -758,7 +753,14 @@ def _extract_tool_input_path(data: dict[str, Any]) -> str:
 
 
 def _extract_transcript_path(data: dict[str, Any]) -> str:
-    for key in ("transcript_path", "transcriptPath", "output_file", "outputFile"):
+    for key in (
+        "transcript_path",
+        "transcriptPath",
+        "agent_transcript_path",
+        "agentTranscriptPath",
+        "output_file",
+        "outputFile",
+    ):
         value = data.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
@@ -1842,7 +1844,13 @@ class SecurityQueue(QueueManager):
         if not data:
             return set()
         items = data.get("pending_findings") or []
-        return cast(set[str], {item.get("fingerprint") for item in items if isinstance(item, dict)})
+        return {
+            fingerprint
+            for item in items
+            if isinstance(item, dict)
+            for fingerprint in (item.get("fingerprint"),)
+            if isinstance(fingerprint, str) and fingerprint
+        }
 
     def append_findings(self, findings: list[dict[str, Any]], *, session_id: str) -> int:
         data = self.load() or {
@@ -1853,7 +1861,13 @@ class SecurityQueue(QueueManager):
         pending = data.get("pending_findings") or []
         if not isinstance(pending, list):
             pending = []
-        existing = {item.get("fingerprint") for item in pending if isinstance(item, dict)}
+        existing = {
+            fingerprint
+            for item in pending
+            if isinstance(item, dict)
+            for fingerprint in (item.get("fingerprint"),)
+            if isinstance(fingerprint, str) and fingerprint
+        }
         added = 0
         for finding in findings:
             if not isinstance(finding, dict):
@@ -2171,34 +2185,7 @@ def append_unverified_findings_to_security_queue(
     git_root: Path, findings: list[dict[str, Any]], *, session_id: str
 ) -> int:
     """Append unverified High+ findings; returns count added."""
-    queue_path = _review_path(git_root, SECURITY_QUEUE_FILE)
-    queue = _read_json_file(queue_path) or {
-        "schema_version": 1,
-        "session_id": session_id,
-        "pending_findings": [],
-    }
-    pending = queue.get("pending_findings") or []
-    if not isinstance(pending, list):
-        pending = []
-    existing = {item.get("fingerprint") for item in pending if isinstance(item, dict)}
-    added = 0
-    for finding in findings:
-        if not isinstance(finding, dict):
-            continue
-        severity = str(finding.get("severity") or "").lower()
-        verified = finding.get("verified") is True
-        if verified or severity not in {"high", "critical", "p0", "p1"}:
-            continue
-        fp = security_fingerprint(finding)
-        if fp in existing:
-            continue
-        pending.append({**finding, "fingerprint": fp, "verified": False})
-        existing.add(fp)
-        added += 1
-    queue["pending_findings"] = pending
-    queue["updated_at"] = _now_iso()
-    _write_json_file(queue_path, queue)
-    return added
+    return SecurityQueue(git_root).append_findings(findings, session_id=session_id)
 
 
 def load_quarantine_tests(git_root: Path) -> set[str]:
