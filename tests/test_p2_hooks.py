@@ -4,9 +4,7 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -171,6 +169,19 @@ class McpPermissionTests(SecretBootstrapMixin, unittest.TestCase):
             result = rg.check_mcp_permission_from_hook(data)
             self.assertEqual(result["permission"], "deny", f"{tool} should be denied")
 
+
+    def test_blocks_underscore_bypass_names(self):
+        self._write_role("agent-7", "reviewer-codex")
+        for tool in ("task_create", "notion_create_page", "mcp__notion__create_page", "createPage", "PutItem"):
+            data = {"cwd": str(self.root), "subagent_id": "agent-7", "tool_name": tool}
+            result = rg.check_mcp_permission_from_hook(data)
+            self.assertEqual(result["permission"], "deny", tool)
+
+    def test_camelcase_payload_denies_write(self):
+        self._write_role("agent-8", "reviewer-grok")
+        data = {"cwd": str(self.root), "subagentId": "agent-8", "toolName": "createPage"}
+        result = rg.check_mcp_permission_from_hook(data)
+        self.assertEqual(result["permission"], "deny")
 
 class GitCacheTests(unittest.TestCase):
     def setUp(self) -> None:

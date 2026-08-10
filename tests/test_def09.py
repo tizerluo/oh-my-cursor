@@ -6,7 +6,6 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -229,7 +228,7 @@ class MigrateMapStateTests(SecretBootstrapMixin, unittest.TestCase):
             branch, sha = "main", "abc"
             legacy_dir = root / ".review-session" / branch / sha
             write_marker_file(self.rg, legacy_dir, "coder", branch, sha)
-            manifest = self.migrate.migrate(
+            self.migrate.migrate(
                 root, apply=True, destructive=False, force=False, confirm=None
             )
             canonical = root / ".review" / "session" / branch / sha

@@ -450,8 +450,8 @@ VALID_TRANSITIONS: dict[str, dict[str, list[str]]] = {
         "coding": ["testing"],
         "testing": ["review-pending"],
         "review-pending": ["synthesis-complete"],
-        "synthesis-complete": ["fix-round-*", "merge-ready"],
-        "fix-round-*": ["synthesis-complete"],
+        "synthesis-complete": ["fix-round-*", "merge-ready", "synthesis-complete"],
+        "fix-round-*": ["synthesis-complete", "review-pending"],
         "merge-ready": ["merged", "cleanup"],
     },
     "map-hyperplan": {
@@ -473,10 +473,10 @@ VALID_TRANSITIONS: dict[str, dict[str, list[str]]] = {
         "analysis": ["baseline"],
         "baseline": ["implement"],
         "implement": ["regression"],
-        "regression": ["review-pending", "fix-round-*"],
+        "regression": ["review-pending", "fix-round-*", "regression"],
         "fix-round-*": ["regression"],
         "review-pending": ["synthesis-complete"],
-        "synthesis-complete": ["merge-ready", "fix-round-*"],
+        "synthesis-complete": ["merge-ready", "fix-round-*", "synthesis-complete"],
     },
 }
 
@@ -494,11 +494,27 @@ class PhaseTransitionError(Exception):
 
 def validate_phase_transition(workflow: str, current: str, target: str) -> bool:
     """Check if a phase transition is allowed. Returns True if valid."""
-    transitions = VALID_TRANSITIONS.get(workflow, {})
-    allowed = transitions.get(current, [])
-    if not allowed:
+    transitions = VALID_TRANSITIONS.get(workflow)
+    if transitions is None:
         return True
-    return any(fnmatch.fnmatch(target, p) for p in allowed)
+    if not current:
+        return True
+    allowed: list[str] = []
+    matched_current = False
+    for phase_key, targets in transitions.items():
+        if fnmatch.fnmatch(current, phase_key):
+            matched_current = True
+            allowed.extend(targets)
+    if not matched_current:
+        return False
+    return any(fnmatch.fnmatch(target, pattern) for pattern in allowed)
+
+
+def _fix_queue_advance_target_phase(workflow: str) -> str:
+    """Return the progress phase to set after advancing the fix queue."""
+    if workflow == "map-refactor":
+        return "regression"
+    return "synthesis-complete"
 
 
 def safe_transition_phase(
@@ -1826,10 +1842,11 @@ def advance_fix_queue(
     increment_round: bool = False,
     head_sha: str | None = None,
     branch: str | None = None,
+    force_phase: bool = False,
 ) -> dict[str, Any]:
     """After a fix-review cycle: drop resolved issues, reset phase for stop hook."""
-    fix_path = _review_path(git_root, FIX_QUEUE_FILE)
-    fix_queue = _read_json_file(fix_path)
+    fix_q = FixQueue(git_root)
+    fix_queue = fix_q.load()
     if fix_queue is None:
         return {"ok": False, "reason": "fix-queue missing"}
 
@@ -1845,14 +1862,12 @@ def advance_fix_queue(
         fix_queue["head_sha"] = head_sha
     if branch:
         fix_queue["branch"] = branch
-    fix_queue["updated_at"] = _now_iso()
 
     if not p0 and not p1:
-        if fix_path.is_file():
-            fix_path.unlink()
+        fix_q.delete()
         queue_action = "deleted"
     else:
-        _write_json_file(fix_path, fix_queue)
+        fix_q.save(fix_queue)
         queue_action = "updated"
 
     progress_path = _review_path(git_root, PROGRESS_FILE)
@@ -1860,12 +1875,18 @@ def advance_fix_queue(
     config_path = _review_path(git_root, CONFIG_FILE)
     config = _read_json_file(config_path) or {}
     workflow = str(config.get("workflow") or "multi-agent-pr")
-    try:
-        safe_transition_phase(git_root, workflow, "synthesis-complete")
-    except PhaseTransitionError:
-        progress["phase"] = "synthesis-complete"
-        progress["updated_at"] = _now_iso()
-        _write_json_file(progress_path, progress)
+    target_phase = _fix_queue_advance_target_phase(workflow)
+    current_phase = str(progress.get("phase") or "")
+    if current_phase != target_phase:
+        if force_phase:
+            print(
+                f"WARNING: forcing phase transition {current_phase!r} -> {target_phase!r} "
+                f"in workflow {workflow!r}",
+                file=sys.stderr,
+            )
+            safe_transition_phase(git_root, workflow, target_phase, force=True)
+        else:
+            safe_transition_phase(git_root, workflow, target_phase)
     progress = _read_json_file(progress_path) or {}
     if head_sha:
         progress["head_sha"] = head_sha
@@ -1897,8 +1918,8 @@ def advance_critic_queue(
     increment_round: bool = False,
 ) -> dict[str, Any]:
     """Hyperplan: remove resolved critic items; optionally bump round."""
-    critic_path = _review_path(git_root, CRITIC_QUEUE_FILE)
-    critic_queue = _read_json_file(critic_path)
+    critic_q = CriticQueue(git_root)
+    critic_queue = critic_q.load()
     if critic_queue is None:
         return {"ok": False, "reason": "critic-queue missing"}
 
@@ -1918,7 +1939,6 @@ def advance_critic_queue(
     queue_round = critic_queue.get("round")
     if increment_round:
         critic_queue["round"] = int(critic_queue.get("round") or 1) + 1
-    critic_queue["updated_at"] = _now_iso()
 
     config_path = _review_path(git_root, CONFIG_FILE)
     config = _read_json_file(config_path) or {}
@@ -1941,22 +1961,18 @@ def advance_critic_queue(
             return {"ok": False, "reason": f"debate report invalid: {debate_msg}"}
 
     if not kept:
-        if critic_path.is_file():
-            critic_path.unlink()
+        critic_q.delete()
         action = "deleted"
     else:
-        _write_json_file(critic_path, critic_queue)
+        critic_q.save(critic_queue)
         action = "updated"
 
     progress_path = _review_path(git_root, PROGRESS_FILE)
     progress = _read_json_file(progress_path) or {}
     target_phase = "revise" if kept else "accepted"
-    try:
+    current_phase = str(progress.get("phase") or "")
+    if current_phase != target_phase:
         safe_transition_phase(git_root, "map-hyperplan", target_phase)
-    except PhaseTransitionError:
-        progress["phase"] = target_phase
-        progress["updated_at"] = _now_iso()
-        _write_json_file(progress_path, progress)
     progress = _read_json_file(progress_path) or {}
 
     result: dict[str, Any] = {
@@ -2443,26 +2459,20 @@ def _reset_models_cache() -> None:
 
 
 def _build_reviewer_model_map() -> dict[str, str]:
-    cfg = _load_models_config()
-    result: dict[str, str] = {}
-    for role, info in cfg.get("reviewers", {}).items():
-        model = info.get("model", "") if isinstance(info, dict) else ""
-        if model:
-            result[model] = role
-    if not result:
-        result = {v: k for k, v in _FALLBACK_REVIEWERS.items()}
-    return result
+    spawn = _build_reviewer_spawn_models()
+    return {model: role for role, model in spawn.items()}
 
 
 def _build_reviewer_spawn_models() -> dict[str, str]:
     cfg = _load_models_config()
+    reviewers = cfg.get("reviewers", {})
+    if not isinstance(reviewers, dict):
+        reviewers = {}
     result: dict[str, str] = {}
-    for role, info in cfg.get("reviewers", {}).items():
+    for role, fallback_model in _FALLBACK_REVIEWERS.items():
+        info = reviewers.get(role, {})
         model = info.get("model", "") if isinstance(info, dict) else ""
-        if model:
-            result[role] = model
-    if not result:
-        result = dict(_FALLBACK_REVIEWERS)
+        result[role] = model if model else fallback_model
     return result
 
 
@@ -2599,6 +2609,17 @@ def _role_for_permission(ctx: dict[str, Any], data: dict[str, Any]) -> tuple[str
     return role, role_data
 
 
+def _is_commander_session(data: dict[str, Any]) -> bool:
+    """True for the parent Commander session (not a subagent transcript)."""
+    _, _, subagent_id = _extract_subagent_fields(data)
+    if subagent_id:
+        return False
+    transcript = _extract_transcript_path(data)
+    if not transcript:
+        return False
+    return "/subagents/" not in transcript.replace("\\", "/")
+
+
 def check_tool_permission_from_hook(data: dict[str, Any]) -> dict[str, Any]:
     ctx = load_map_context(data)
     if ctx is None:
@@ -2670,10 +2691,24 @@ def check_tool_permission_from_hook(data: dict[str, Any]) -> dict[str, Any]:
         }
 
     if role == "":
+        if _is_commander_session(data):
+            if _path_allowed(norm_path, [".review/", ".specs/"], git_root):
+                return {"permission": "allow"}
+            return {
+                "permission": "deny",
+                "user_message": "Commander may only Write/Delete under .review/ and .specs/.",
+                "agent_message": (
+                    "BLOCKED: Commander cannot edit implementation files; "
+                    "spawn a coder subagent for hooks/, scripts/, tests/, etc."
+                ),
+            }
         return {
             "permission": "deny",
             "user_message": "Write/Delete blocked: no MAP role assigned.",
-            "agent_message": "BLOCKED: active MAP session requires subagentStart role assignment.",
+            "agent_message": (
+                "BLOCKED: subagent without role file cannot Write/Delete. "
+                "Commander may write .review/ and .specs/ only."
+            ),
         }
 
     if role == "generalPurpose" and workflow == "map-hyperplan":
@@ -2896,14 +2931,39 @@ def compact_inject(data: dict[str, Any]) -> dict[str, Any]:
     return {"additional_context": "\n".join(parts)}
 
 
-_MCP_WRITE_KEYWORDS = re.compile(
-    r"\b(write|create|update|delete|insert|remove|edit|modify|put|patch|append|set|add)(?=[_\-\s]|$)",
-    re.I,
-)
+_MCP_WRITE_VERBS = frozenset({
+    "write",
+    "create",
+    "update",
+    "delete",
+    "insert",
+    "remove",
+    "edit",
+    "modify",
+    "put",
+    "patch",
+    "append",
+    "set",
+    "add",
+})
+
+
+def _tokenize_mcp_tool_name(tool_name: str) -> list[str]:
+    """Split MCP tool names on separators and camelCase boundaries."""
+    if not tool_name:
+        return []
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", tool_name)
+    spaced = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", spaced)
+    tokens: list[str] = []
+    for chunk in re.split(r"[_\-.]+", spaced):
+        for part in chunk.split():
+            if part:
+                tokens.append(part.lower())
+    return tokens
 
 
 def _mcp_tool_is_write(tool_name: str) -> bool:
-    return bool(_MCP_WRITE_KEYWORDS.search(tool_name or ""))
+    return any(token in _MCP_WRITE_VERBS for token in _tokenize_mcp_tool_name(tool_name))
 
 
 def check_mcp_permission_from_hook(data: dict[str, Any]) -> dict[str, Any]:
@@ -2912,10 +2972,10 @@ def check_mcp_permission_from_hook(data: dict[str, Any]) -> dict[str, Any]:
     if ctx is None:
         return {"permission": "allow"}
     git_root = ctx["git_root"]
-    tool_name = str(data.get("tool_name") or data.get("name") or "")
+    tool_name = _extract_tool_name(data)
     if not _mcp_tool_is_write(tool_name):
         return {"permission": "allow"}
-    subagent_id = str(data.get("subagent_id") or data.get("agent_id") or "")
+    _, _, subagent_id = _extract_subagent_fields(data)
     if subagent_id:
         role_data = _read_json_file(
             _review_path(git_root, ROLES_DIR) / f"{_slug(subagent_id)}.json"

@@ -230,6 +230,8 @@ Defaults pre-selected by workflow + tier.
 
 Display: `预估子代理调用次数：{workflow} x {models} x {rounds} ≈ {N} 次`
 
+Changing reviewer models in `hooks/config/models.json` requires starting a **new MAP session** (session `config.json` is the contract the merge gate checks).
+
 After confirmation, write `.review/config.json` and initialize `.review/progress.json`
 with `phase: config-confirmed`.
 

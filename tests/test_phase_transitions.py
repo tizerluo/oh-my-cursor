@@ -3,12 +3,9 @@
 
 from __future__ import annotations
 
-import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from map_test_helpers import load_review_gate
 
@@ -78,9 +75,24 @@ class PhaseTransitionValidationTests(unittest.TestCase):
             self.rg.validate_phase_transition("unknown-workflow", "any-phase", "other-phase")
         )
 
-    def test_unknown_current_phase_allows_any(self):
-        self.assertTrue(
+    def test_unknown_current_phase_rejected_for_known_workflow(self):
+        self.assertFalse(
             self.rg.validate_phase_transition("multi-agent-pr", "unknown-phase", "anything")
+        )
+
+    def test_fix_round_to_review_pending_valid(self):
+        self.assertTrue(
+            self.rg.validate_phase_transition("multi-agent-pr", "fix-round-1", "review-pending")
+        )
+
+    def test_fix_round_to_merge_ready_invalid(self):
+        self.assertFalse(
+            self.rg.validate_phase_transition("multi-agent-pr", "fix-round-1", "merge-ready")
+        )
+
+    def test_typo_current_phase_invalid(self):
+        self.assertFalse(
+            self.rg.validate_phase_transition("multi-agent-pr", "fix-rond-1", "synthesis-complete")
         )
 
 

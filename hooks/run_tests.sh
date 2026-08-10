@@ -13,3 +13,4 @@ python3 tests/test_p2_hooks.py
 python3 tests/test_p3_coverage.py
 python3 tests/test_phase_transitions.py
 python3 tests/test_queues_unified.py
+python3 tests/test_fix_round1.py
