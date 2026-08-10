@@ -338,6 +338,27 @@ MAP_MANAGED_ROLES = {
     "generalPurpose",
 }
 
+
+def _subagent_type_norm_key(value: str) -> str:
+    """Lowercase and strip separators for platform alias comparison."""
+    return re.sub(r"[-_]", "", value.lower())
+
+
+# Cursor 3.15+ may deliver hyphenated/lowercased lifecycle values (e.g. general-purpose).
+_SUBAGENT_TYPE_CANONICAL: dict[str, str] = {
+    _subagent_type_norm_key(t): t
+    for t in (*ALL_RECORDED_TYPES, *MAP_MANAGED_ROLES)
+}
+
+
+def _normalize_subagent_type(raw: str) -> str:
+    """Map platform subagent_type aliases to canonical MAP forms."""
+    stripped = raw.strip()
+    if not stripped:
+        return stripped
+    return _SUBAGENT_TYPE_CANONICAL.get(_subagent_type_norm_key(stripped), stripped)
+
+
 SPAWN_PHASE_RULES: dict[str, dict[str, list[str]]] = {
     "multi-agent-pr": {
         "coder": ["adjudication", "coding", "testing", "review-pending", "fix-round-*"],
@@ -682,6 +703,9 @@ def _extract_subagent_fields(data: dict[str, Any]) -> tuple[str, str, str]:
         if isinstance(value, str) and value.strip():
             subagent_id = value.strip()
             break
+
+    if subagent_type:
+        subagent_type = _normalize_subagent_type(subagent_type)
 
     return subagent_type, model, subagent_id
 
@@ -1102,7 +1126,7 @@ def _task_subagent_type(data: dict[str, Any]) -> str:
     for key in ("subagent_type", "subagentType"):
         value = tool_input.get(key)
         if isinstance(value, str) and value.strip():
-            return value.strip()
+            return _normalize_subagent_type(value.strip())
     return _extract_subagent_fields(data)[0]
 
 

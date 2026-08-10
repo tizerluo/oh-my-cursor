@@ -125,6 +125,8 @@ The merge gate is intentionally fail-closed. It validates all of the following:
 
 Markers are written by hooks when subagents finish (canonical: `.review/session/`). `.review/session-summary.json` is a human-readable derived summary only; the merge gate validates marker files, not the summary. Commander MUST NOT forge either.
 
+**Note (Cursor 3.15+):** lifecycle payloads deliver hyphenated subagent types (e.g. `general-purpose` instead of `generalPurpose`). v1.3 hooks normalize these before role/marker recording — if session markers are missing after subagent completion, verify the installed hook version includes F12 normalization.
+
 Migrate legacy paths: `python3 scripts/migrate_map_state.py <repo> --apply` (see oh-my-cursor [state-migration.md](https://github.com/tizerluo/oh-my-cursor/blob/main/docs/state-migration.md)).
 
 ### Tool permission depth defense (V1.3)
