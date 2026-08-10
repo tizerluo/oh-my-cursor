@@ -489,7 +489,7 @@ VALID_TRANSITIONS: dict[str, dict[str, list[str]]] = {
         "testing": ["review-pending"],
         "review-pending": ["synthesis-complete"],
         "synthesis-complete": ["fix-round-*", "merge-ready", "synthesis-complete"],
-        "fix-round-*": ["review-pending"],
+        "fix-round-*": ["synthesis-complete", "review-pending"],
         "merge-ready": ["merged", "cleanup", "fix-round-*"],
     },
     "map-hyperplan": {
@@ -512,7 +512,7 @@ VALID_TRANSITIONS: dict[str, dict[str, list[str]]] = {
         "baseline": ["implement"],
         "implement": ["regression"],
         "regression": ["review-pending", "fix-round-*", "regression"],
-        "fix-round-*": ["review-pending"],
+        "fix-round-*": ["regression"],
         "review-pending": ["synthesis-complete"],
         "synthesis-complete": ["merge-ready", "fix-round-*", "synthesis-complete"],
         "merge-ready": ["merged", "cleanup", "fix-round-*"],
@@ -551,8 +551,9 @@ def validate_phase_transition(workflow: str, current: str, target: str) -> bool:
 
 def _fix_queue_advance_target_phase(workflow: str) -> str:
     """Return the progress phase to set after advancing the fix queue."""
-    # 两种修复工作流都必须重新经过 reviewer，不能直接回到综合阶段。
-    return "review-pending"
+    if workflow == "map-refactor":
+        return "regression"
+    return "synthesis-complete"
 
 
 def safe_transition_phase(
@@ -2184,34 +2185,7 @@ def append_unverified_findings_to_security_queue(
     git_root: Path, findings: list[dict[str, Any]], *, session_id: str
 ) -> int:
     """Append unverified High+ findings; returns count added."""
-    queue_path = _review_path(git_root, SECURITY_QUEUE_FILE)
-    queue = _read_json_file(queue_path) or {
-        "schema_version": 1,
-        "session_id": session_id,
-        "pending_findings": [],
-    }
-    pending = queue.get("pending_findings") or []
-    if not isinstance(pending, list):
-        pending = []
-    existing = {item.get("fingerprint") for item in pending if isinstance(item, dict)}
-    added = 0
-    for finding in findings:
-        if not isinstance(finding, dict):
-            continue
-        severity = str(finding.get("severity") or "").lower()
-        verified = finding.get("verified") is True
-        if verified or severity not in {"high", "critical", "p0", "p1"}:
-            continue
-        fp = security_fingerprint(finding)
-        if fp in existing:
-            continue
-        pending.append({**finding, "fingerprint": fp, "verified": False})
-        existing.add(fp)
-        added += 1
-    queue["pending_findings"] = pending
-    queue["updated_at"] = _now_iso()
-    _write_json_file(queue_path, queue)
-    return added
+    return SecurityQueue(git_root).append_findings(findings, session_id=session_id)
 
 
 def load_quarantine_tests(git_root: Path) -> set[str]:

@@ -42,8 +42,8 @@ class PhaseTransitionValidationTests(unittest.TestCase):
             self.rg.validate_phase_transition("multi-agent-pr", "synthesis-complete", "fix-round-3")
         )
 
-    def test_fix_round_cannot_skip_review_pending(self):
-        self.assertFalse(
+    def test_fix_round_back_to_synthesis(self):
+        self.assertTrue(
             self.rg.validate_phase_transition("multi-agent-pr", "fix-round-1", "synthesis-complete")
         )
 
@@ -77,11 +77,11 @@ class PhaseTransitionValidationTests(unittest.TestCase):
                     self.rg.validate_phase_transition(workflow, "merge-ready", "fix-round-2")
                 )
 
-    def test_fix_round_returns_to_review_pending(self):
+    def test_merge_ready_cannot_return_directly_to_review_pending(self):
         for workflow in ("multi-agent-pr", "map-refactor"):
             with self.subTest(workflow=workflow):
-                self.assertTrue(
-                    self.rg.validate_phase_transition(workflow, "fix-round-2", "review-pending")
+                self.assertFalse(
+                    self.rg.validate_phase_transition(workflow, "merge-ready", "review-pending")
                 )
 
     def test_refactor_terminal_phases_are_registered(self):
