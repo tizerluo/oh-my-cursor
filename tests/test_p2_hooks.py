@@ -149,10 +149,22 @@ class McpPermissionTests(SecretBootstrapMixin, unittest.TestCase):
         result = rg.check_mcp_permission_from_hook(data)
         self.assertEqual(result["permission"], "allow")
 
-    def test_allows_when_no_subagent_id(self):
+    def test_denies_write_when_no_subagent_id_and_no_role(self):
+        """v1.3.1：无角色时 MCP 写不再 fail-open（与 Write 门对齐）。"""
         data = {"cwd": str(self.root), "tool_name": "delete_file"}
         result = rg.check_mcp_permission_from_hook(data)
-        self.assertEqual(result["permission"], "allow")
+        self.assertEqual(result["permission"], "deny")
+        self.assertIn("no role", result.get("user_message", "").lower())
+
+    def test_denies_createpage_alias_for_reviewer(self):
+        self._write_role("agent-cp", "reviewer-grok")
+        data = {
+            "cwd": str(self.root),
+            "subagent_id": "agent-cp",
+            "tool_name": "createpage",
+        }
+        result = rg.check_mcp_permission_from_hook(data)
+        self.assertEqual(result["permission"], "deny")
 
     def test_allows_readonly_tools_with_write_substrings(self):
         """Regression: settings_get, address_lookup, addon_search must not be flagged."""
