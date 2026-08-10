@@ -100,11 +100,15 @@ def is_map_hook_entry(
 
 
 def expected_map_hook_count(review_gate_path: Path | None = None) -> int:
+    """Count MAP entries from bundled template after install-time dedupe."""
     gate = review_gate_path or (OMC_ROOT / "hooks" / "review_gate.py")
     rendered = render_map_hooks(gate)
+    hook_events = rendered.get("hooks", {})
+    if not isinstance(hook_events, dict):
+        return 0
     return sum(
-        len(entries)
-        for entries in rendered.get("hooks", {}).values()
+        len(_dedupe_hook_entries(entries, gate))
+        for entries in hook_events.values()
         if isinstance(entries, list)
     )
 

@@ -6,6 +6,31 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08-10
+
+### Added
+
+- **Model config externalized** to `hooks/config/models.json` with per-key fallback defaults when keys or the file are missing (F7)
+- **Phase state machine** — `VALID_TRANSITIONS` matrix and `safe_transition_phase()` (graceful fallback, never blocks sessions)
+- **Unified queue interface** — `QueueManager` base with `FixQueue` / `CriticQueue` / `SecurityQueue`; production wiring for fix/critic advance paths (F8)
+- **Two new hook events** (8 types, 11 MAP entries): `preCompact` (`compact-inject`) and `beforeMCPExecution` (`check-mcp-permission`, fail-open)
+- **Git operation caching** — `_git_root` / `_branch` / `_head` / `_tree` cached per hook invocation
+- **Cursor 3.15 compat** — workspace cache for subagent lifecycle payloads with empty `workspace_roots`; tolerant case/underscore matchers on `subagentStart` / `subagentStop`; `general-purpose` → `generalPurpose` normalization (F2, F12)
+- **Install doctor** — validates `hooks/config/models.json` and reviewer model keys (F9)
+- **CI** — ruff + mypy (fail-closed), install smoke with `doctor --security`, `py_compile`, stale-path scan (F6)
+- **87+ new tests** (140 → 266 via `hooks/run_tests.sh`), covering phase transitions, queues, compact-inject, MCP permission, workspace cache, subagent type normalization
+
+### Changed
+
+- Hooks template consolidated to **11 MAP entries** after F12 matcher unification (was 13 with redundant `subagentStop` rows); `omc doctor` derives expected count from bundled template post-dedupe
+- Commander (parent session) may `Write`/`Delete` under `.review/` and `.specs/` without a subagent role file (F10)
+
+### Fixed
+
+- **Phase machine (F1, F3):** current-side glob matching against matrix keys; no silent phase force-write in queue advance; workflow-specific fix targets; skip no-op transitions
+- **MCP permission gate (F4, F5):** camelCase tool names; token-based write-verb detection (fewer false positives on read tools)
+- MCP write-keyword regex false positives (`settings_get`, `address_lookup`); Chinese hyperplan keyword matching; `_git_cached` missing `OSError` handling; ruff lint issues
+
 ## [1.2] - 2026-06-09
 
 ### Added

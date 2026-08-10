@@ -48,16 +48,6 @@
         "command": "REVIEW_GATE_HOOK_MODE=subagentStop python3 {{REVIEW_GATE_QUOTED_PATH}} record-subagent",
         "matcher": "[Cc]oder|[Aa]rchitect|[Tt]ester[-_]?[Ww]riter|[Rr]eviewer[-_]?[Gg]rok|[Rr]eviewer[-_]?[Cc]odex|[Rr]eviewer[-_]?[Gg]emini|[Ee]xplore|[Gg]eneral[-_]?[Pp]urpose|[Pp]lanner",
         "omc": true
-      },
-      {
-        "command": "REVIEW_GATE_HOOK_MODE=subagentStop python3 {{REVIEW_GATE_QUOTED_PATH}} record-subagent",
-        "matcher": "[Cc]oder|[Aa]rchitect|[Tt]ester[-_]?[Ww]riter|[Rr]eviewer[-_]?[Gg]rok|[Rr]eviewer[-_]?[Cc]odex|[Rr]eviewer[-_]?[Gg]emini|[Ee]xplore|[Gg]eneral[-_]?[Pp]urpose|[Pp]lanner",
-        "omc": true
-      },
-      {
-        "command": "REVIEW_GATE_HOOK_MODE=subagentStop python3 {{REVIEW_GATE_QUOTED_PATH}} record-subagent",
-        "matcher": "[Cc]oder|[Aa]rchitect|[Tt]ester[-_]?[Ww]riter|[Rr]eviewer[-_]?[Gg]rok|[Rr]eviewer[-_]?[Cc]odex|[Rr]eviewer[-_]?[Gg]emini|[Ee]xplore|[Gg]eneral[-_]?[Pp]urpose|[Pp]lanner",
-        "omc": true
       }
     ],
     "stop": [

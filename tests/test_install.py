@@ -73,9 +73,26 @@ class MergeHooksTests(unittest.TestCase):
         map_hooks = omc_install.render_map_hooks(gate)
         merged = omc_install.merge_hooks(existing, map_hooks, review_gate_path=gate)
         stop = merged["hooks"]["subagentStop"]
-        self.assertEqual(len(stop), 3)
+        self.assertEqual(len(stop), 1)
         self.assertTrue(all(omc_install.is_map_hook_entry(e, gate) for e in stop))
         self.assertTrue(all(e.get("omc") is True for e in stop))
+
+    def test_expected_map_hook_count_matches_template_dedupe(self):
+        gate = Path("/opt/omc/hooks/review_gate.py")
+        rendered = omc_install.render_map_hooks(gate)
+        expected = omc_install.expected_map_hook_count(gate)
+        raw = sum(
+            len(entries)
+            for entries in rendered.get("hooks", {}).values()
+            if isinstance(entries, list)
+        )
+        deduped = sum(
+            len(omc_install._dedupe_hook_entries(entries, gate))
+            for entries in rendered.get("hooks", {}).values()
+            if isinstance(entries, list)
+        )
+        self.assertEqual(raw, deduped)
+        self.assertEqual(expected, 11)
 
     def test_rendered_commands_are_quoted(self):
         gate = Path("/opt/with space/review_gate.py")
