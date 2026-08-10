@@ -191,5 +191,52 @@ class InstallIntegrationTests(unittest.TestCase):
             self.assertEqual(restored, original)
 
 
+
+class DoctorModelsConfigTests(unittest.TestCase):
+    def test_doctor_passes_with_valid_models_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cursor_dir = Path(tmp) / ".cursor"
+            hooks = cursor_dir / "hooks"
+            hooks.mkdir(parents=True)
+            gate = hooks / "review_gate.py"
+            gate.write_text("# stub\n", encoding="utf-8")
+            config_dir = hooks / "config"
+            config_dir.mkdir()
+            (config_dir / "models.json").write_text(
+                json.dumps(
+                    {
+                        "reviewers": {
+                            "reviewer-grok": {"model": "grok-4.5"},
+                            "reviewer-codex": {"model": "gpt-5.3-codex-high-fast"},
+                            "reviewer-gemini": {"model": "gemini-3.1-pro"},
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (cursor_dir / "hooks.json").write_text(json.dumps({"hooks": {}}), encoding="utf-8")
+            (cursor_dir / "omc-install.json").write_text(
+                json.dumps({"mode": "copy", "installed_at": "2026-01-01T00:00:00Z"}),
+                encoding="utf-8",
+            )
+            with patch.object(omc_install, "expected_map_hook_count", return_value=0):
+                rc = omc_install.run_doctor(cursor_dir)
+            self.assertEqual(rc, 0)
+
+    def test_doctor_fails_when_models_json_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cursor_dir = Path(tmp) / ".cursor"
+            hooks = cursor_dir / "hooks"
+            hooks.mkdir(parents=True)
+            (hooks / "review_gate.py").write_text("# stub\n", encoding="utf-8")
+            (cursor_dir / "hooks.json").write_text(json.dumps({"hooks": {}}), encoding="utf-8")
+            (cursor_dir / "omc-install.json").write_text(
+                json.dumps({"mode": "copy", "installed_at": "2026-01-01T00:00:00Z"}),
+                encoding="utf-8",
+            )
+            with patch.object(omc_install, "expected_map_hook_count", return_value=0):
+                rc = omc_install.run_doctor(cursor_dir)
+            self.assertEqual(rc, 1)
+
 if __name__ == "__main__":
     unittest.main()

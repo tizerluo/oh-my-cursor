@@ -38,6 +38,46 @@ HOOKS_COPY_DIRS = ("schemas", "spikes", "config")
 
 REVIEW_GATE_MARKER = "review_gate.py"
 
+REVIEWER_MODEL_FALLBACKS: dict[str, str] = {
+    "reviewer-grok": "grok-4.5",
+    "reviewer-codex": "gpt-5.3-codex-high-fast",
+    "reviewer-gemini": "gemini-3.1-pro",
+}
+
+
+def _check_models_config(gate: Path) -> tuple[list[str], list[str]]:
+    """Verify hooks/config/models.json exists and reviewer models are valid."""
+    ok: list[str] = []
+    issues: list[str] = []
+    models_path = gate.parent / "config" / "models.json"
+    if not models_path.is_file():
+        issues.append(f"models.json missing: {models_path}")
+        return ok, issues
+    try:
+        data = load_json(models_path)
+    except InstallError as exc:
+        issues.append(f"models.json invalid: {exc}")
+        return ok, issues
+    reviewers = data.get("reviewers")
+    if not isinstance(reviewers, dict):
+        issues.append("models.json: reviewers section missing or not an object")
+        return ok, issues
+    for role, fallback in REVIEWER_MODEL_FALLBACKS.items():
+        info = reviewers.get(role)
+        if not isinstance(info, dict):
+            issues.append(f"models.json: missing reviewer key {role!r}")
+            continue
+        model = str(info.get("model") or "")
+        if not model:
+            issues.append(f"models.json: reviewer {role!r} has empty model")
+            continue
+        if model == fallback:
+            ok.append(f"models.json: {role} -> {model} (fallback default)")
+        else:
+            ok.append(f"models.json: {role} -> {model} (custom)")
+    return ok, issues
+
+
 
 class InstallError(Exception):
     pass
@@ -465,6 +505,9 @@ def run_doctor(cursor_dir: Path | None = None, *, security: bool = False) -> int
 
     if gate.is_file():
         ok.append(f"review_gate.py: {gate}")
+        models_ok, models_issues = _check_models_config(gate)
+        ok.extend(models_ok)
+        issues.extend(models_issues)
     else:
         issues.append(f"review_gate.py missing: {gate}")
 
