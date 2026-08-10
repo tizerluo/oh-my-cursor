@@ -53,9 +53,9 @@ class AdvanceFixQueueTests(unittest.TestCase):
             result = rg.advance_fix_queue(root, mark_resolved_ids=["a"], increment_round=True)
             self.assertTrue(result["ok"])
             self.assertEqual(result["p0_remaining"], 1)
-            self.assertEqual(result["phase"], "synthesis-complete")
+            self.assertEqual(result["phase"], "review-pending")
             progress = json.loads((root / ".review/progress.json").read_text())
-            self.assertEqual(progress["phase"], "synthesis-complete")
+            self.assertEqual(progress["phase"], "review-pending")
 
     def test_deletes_queue_when_empty(self):
         with tempfile.TemporaryDirectory() as tmp:

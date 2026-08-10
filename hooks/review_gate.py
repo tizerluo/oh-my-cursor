@@ -17,7 +17,7 @@ import hmac
 import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, NoReturn, cast
+from typing import Any, NoReturn
 
 SESSION_DIR = ".review-session"
 SESSION_FILE = ".review-session.json"
@@ -467,6 +467,8 @@ WORKFLOW_PHASES: dict[str, list[str]] = {
         "review-pending",
         "synthesis-complete",
         "merge-ready",
+        "merged",
+        "cleanup",
     ],
 }
 
@@ -487,8 +489,8 @@ VALID_TRANSITIONS: dict[str, dict[str, list[str]]] = {
         "testing": ["review-pending"],
         "review-pending": ["synthesis-complete"],
         "synthesis-complete": ["fix-round-*", "merge-ready", "synthesis-complete"],
-        "fix-round-*": ["synthesis-complete", "review-pending"],
-        "merge-ready": ["merged", "cleanup"],
+        "fix-round-*": ["review-pending"],
+        "merge-ready": ["merged", "cleanup", "fix-round-*"],
     },
     "map-hyperplan": {
         "config-confirmed": ["draft"],
@@ -510,10 +512,10 @@ VALID_TRANSITIONS: dict[str, dict[str, list[str]]] = {
         "baseline": ["implement"],
         "implement": ["regression"],
         "regression": ["review-pending", "fix-round-*", "regression"],
-        "fix-round-*": ["regression"],
+        "fix-round-*": ["review-pending"],
         "review-pending": ["synthesis-complete"],
         "synthesis-complete": ["merge-ready", "fix-round-*", "synthesis-complete"],
-        "merge-ready": ["merged", "cleanup"],
+        "merge-ready": ["merged", "cleanup", "fix-round-*"],
     },
 }
 
@@ -549,9 +551,8 @@ def validate_phase_transition(workflow: str, current: str, target: str) -> bool:
 
 def _fix_queue_advance_target_phase(workflow: str) -> str:
     """Return the progress phase to set after advancing the fix queue."""
-    if workflow == "map-refactor":
-        return "regression"
-    return "synthesis-complete"
+    # 两种修复工作流都必须重新经过 reviewer，不能直接回到综合阶段。
+    return "review-pending"
 
 
 def safe_transition_phase(
@@ -703,13 +704,6 @@ def _extract_explicit_cwd(data: dict[str, Any]) -> str:
     return ""
 
 
-def _extract_cwd(data: dict[str, Any]) -> str:
-    explicit = _extract_explicit_cwd(data)
-    if explicit:
-        return explicit
-    return os.getcwd()
-
-
 def _extract_subagent_fields(data: dict[str, Any]) -> tuple[str, str, str]:
     subagent_type = ""
     for key in ("subagent_type", "subagentType", "agent_type", "agentType", "type"):
@@ -758,7 +752,14 @@ def _extract_tool_input_path(data: dict[str, Any]) -> str:
 
 
 def _extract_transcript_path(data: dict[str, Any]) -> str:
-    for key in ("transcript_path", "transcriptPath", "output_file", "outputFile"):
+    for key in (
+        "transcript_path",
+        "transcriptPath",
+        "agent_transcript_path",
+        "agentTranscriptPath",
+        "output_file",
+        "outputFile",
+    ):
         value = data.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
@@ -1842,7 +1843,13 @@ class SecurityQueue(QueueManager):
         if not data:
             return set()
         items = data.get("pending_findings") or []
-        return cast(set[str], {item.get("fingerprint") for item in items if isinstance(item, dict)})
+        return {
+            fingerprint
+            for item in items
+            if isinstance(item, dict)
+            for fingerprint in (item.get("fingerprint"),)
+            if isinstance(fingerprint, str) and fingerprint
+        }
 
     def append_findings(self, findings: list[dict[str, Any]], *, session_id: str) -> int:
         data = self.load() or {
@@ -1853,7 +1860,13 @@ class SecurityQueue(QueueManager):
         pending = data.get("pending_findings") or []
         if not isinstance(pending, list):
             pending = []
-        existing = {item.get("fingerprint") for item in pending if isinstance(item, dict)}
+        existing = {
+            fingerprint
+            for item in pending
+            if isinstance(item, dict)
+            for fingerprint in (item.get("fingerprint"),)
+            if isinstance(fingerprint, str) and fingerprint
+        }
         added = 0
         for finding in findings:
             if not isinstance(finding, dict):

@@ -119,6 +119,27 @@ class MergeHooksTests(unittest.TestCase):
         with self.assertRaises(omc_install.InstallError):
             omc_install.validate_non_map_preserved(before, after)
 
+    def test_normalizes_supported_hook_versions(self):
+        gate = Path("/opt/omc/hooks/review_gate.py")
+        map_hooks = omc_install.render_map_hooks(gate)
+        for existing in ({"hooks": {}}, {"version": "1", "hooks": {}}, {"version": 1, "hooks": {}}):
+            with self.subTest(existing=existing):
+                merged = omc_install.merge_hooks(existing, map_hooks, review_gate_path=gate)
+                self.assertIs(type(merged["version"]), int)
+                self.assertEqual(merged["version"], 1)
+
+    def test_rejects_unsupported_hook_versions(self):
+        gate = Path("/opt/omc/hooks/review_gate.py")
+        map_hooks = omc_install.render_map_hooks(gate)
+        for version in (True, 1.0, 2, "2", None):
+            with self.subTest(version=version):
+                with self.assertRaises(omc_install.InstallError):
+                    omc_install.merge_hooks(
+                        {"version": version, "hooks": {}},
+                        map_hooks,
+                        review_gate_path=gate,
+                    )
+
 
 class InstallIntegrationTests(unittest.TestCase):
     def test_copy_install_to_temp_target(self):
@@ -231,7 +252,9 @@ class DoctorModelsConfigTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            (cursor_dir / "hooks.json").write_text(json.dumps({"hooks": {}}), encoding="utf-8")
+            (cursor_dir / "hooks.json").write_text(
+                json.dumps({"version": 1, "hooks": {}}), encoding="utf-8"
+            )
             (cursor_dir / "omc-install.json").write_text(
                 json.dumps(
                     {
@@ -245,6 +268,16 @@ class DoctorModelsConfigTests(unittest.TestCase):
             with patch.object(omc_install, "expected_map_hook_count", return_value=0):
                 rc = omc_install.run_doctor(cursor_dir)
             self.assertEqual(rc, 0)
+
+            for version_payload in ({}, {"version": True}, {"version": "1"}, {"version": 2}):
+                with self.subTest(version_payload=version_payload):
+                    (cursor_dir / "hooks.json").write_text(
+                        json.dumps({**version_payload, "hooks": {}}),
+                        encoding="utf-8",
+                    )
+                    with patch.object(omc_install, "expected_map_hook_count", return_value=0):
+                        rc = omc_install.run_doctor(cursor_dir)
+                    self.assertEqual(rc, 1)
 
     def test_doctor_fails_when_models_json_missing(self):
         with tempfile.TemporaryDirectory() as tmp:

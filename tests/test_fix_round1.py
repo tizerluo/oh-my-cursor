@@ -29,7 +29,7 @@ def _init_git_repo(root: Path, *, branch: str = "main") -> tuple[str, str]:
 
 
 class AdvanceFixQueuePhaseTests(unittest.TestCase):
-    def test_multi_agent_pr_transitions_to_synthesis_complete(self):
+    def test_multi_agent_pr_transitions_to_review_pending(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".review").mkdir()
@@ -44,9 +44,9 @@ class AdvanceFixQueuePhaseTests(unittest.TestCase):
             )
             result = rg.advance_fix_queue(root, mark_resolved_ids=["a"])
             self.assertTrue(result["ok"])
-            self.assertEqual(result["phase"], "synthesis-complete")
+            self.assertEqual(result["phase"], "review-pending")
 
-    def test_map_refactor_transitions_to_regression(self):
+    def test_map_refactor_transitions_to_review_pending(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".review").mkdir()
@@ -61,7 +61,7 @@ class AdvanceFixQueuePhaseTests(unittest.TestCase):
             )
             result = rg.advance_fix_queue(root, mark_resolved_ids=["a"])
             self.assertTrue(result["ok"])
-            self.assertEqual(result["phase"], "regression")
+            self.assertEqual(result["phase"], "review-pending")
 
     def test_skips_phase_write_when_current_equals_target(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -74,13 +74,13 @@ class AdvanceFixQueuePhaseTests(unittest.TestCase):
                 json.dumps({"workflow": "multi-agent-pr"})
             )
             (root / ".review/progress.json").write_text(
-                json.dumps({"phase": "synthesis-complete"})
+                json.dumps({"phase": "review-pending"})
             )
             with patch.object(rg, "safe_transition_phase") as mock_transition:
                 rg.advance_fix_queue(root, mark_resolved_ids=["a"])
                 mock_transition.assert_not_called()
 
-    def _make_fix_root(self, tmp, phase: str = "synthesis-complete") -> Path:
+    def _make_fix_root(self, tmp, phase: str = "review-pending") -> Path:
         """构造 fix queue 夹具；默认阶段已在目标相位，隔离阶段迁移干扰。"""
         root = Path(tmp)
         (root / ".review").mkdir()
@@ -177,7 +177,7 @@ class AdvanceQueueOrderingTests(unittest.TestCase):
             queue_payload = {"p0_issues": [{"id": "a"}], "p1_issues": [], "round": 1}
             (root / ".review/fix-queue.json").write_text(json.dumps(queue_payload))
             (root / ".review/config.json").write_text(json.dumps({"workflow": "multi-agent-pr"}))
-            # coding -> synthesis-complete 不是合法迁移，必然抛 PhaseTransitionError
+            # coding -> review-pending 不是合法迁移，必然抛 PhaseTransitionError
             (root / ".review/progress.json").write_text(json.dumps({"phase": "coding"}))
             before = (root / ".review/fix-queue.json").read_text(encoding="utf-8")
             with self.assertRaises(rg.PhaseTransitionError):
