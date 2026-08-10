@@ -685,7 +685,6 @@ def _extract_explicit_cwd(data: dict[str, Any]) -> str:
 
     G2: Cursor 3.15+ 的 subagentStop 等事件常带空 workspace_roots 且无 cwd。
     只有事件显式携带的 cwd/roots 才允许回写 workspace cache，防止污染。
-    Upstream watch：background subagentStop / agent_transcript_path 见 forum #166681。
     """
     tool_input = data.get("tool_input")
     if not isinstance(tool_input, dict):
