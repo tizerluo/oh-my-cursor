@@ -17,7 +17,7 @@ import hmac
 import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NoReturn, cast
 
 SESSION_DIR = ".review-session"
 SESSION_FILE = ".review-session.json"
@@ -812,13 +812,13 @@ def _git_diff_files(cwd: str) -> list[str]:
         if merge_base.returncode != 0 or not merge_base.stdout.strip():
             continue
         result = _run_subprocess(
-            ["git", "-C", cwd, "diff", "--name-only", merge_base.stdout.strip(), "HEAD"]
+            ["git", "-C", cwd, "diff", "--name-only", os.fsdecode(merge_base.stdout).strip(), "HEAD"]
         )
         if result.returncode == 0:
-            return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+            return [line.strip() for line in os.fsdecode(result.stdout).splitlines() if line.strip()]
     result = _run_subprocess(["git", "-C", cwd, "diff", "--name-only", "HEAD~1", "HEAD"])
     if result.returncode == 0:
-        return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        return [line.strip() for line in os.fsdecode(result.stdout).splitlines() if line.strip()]
     return []
 
 
@@ -1618,8 +1618,8 @@ def validate_review_state(
             "BLOCKED: use Task(subagent_type='coder').",
         )
 
-    p0 = verdict.get("p0")
-    p1 = verdict.get("p1")
+    p0: Any = verdict.get("p0")
+    p1: Any = verdict.get("p1")
     try:
         if int(p0) > 0 or int(p1) > 0:
             return (
@@ -1838,7 +1838,7 @@ class SecurityQueue(QueueManager):
         if not data:
             return set()
         items = data.get("pending_findings") or []
-        return {item.get("fingerprint") for item in items if isinstance(item, dict)}
+        return cast(set[str], {item.get("fingerprint") for item in items if isinstance(item, dict)})
 
     def append_findings(self, findings: list[dict[str, Any]], *, session_id: str) -> int:
         data = self.load() or {
@@ -2261,7 +2261,7 @@ def _count_todo_fixme_threshold(git_root: Path, threshold: int) -> bool:
             elif shutil.which("rg") is None:
                 print("MAP_GATE: rg not found; skipping TODO/FIXME routing hint", file=sys.stderr)
             return False
-        total = sum(int(line.split(":")[-1]) for line in result.stdout.splitlines() if ":" in line)
+        total = sum(int(line.split(":")[-1]) for line in os.fsdecode(result.stdout).splitlines() if ":" in line)
         return total >= threshold
     except OSError:
         print("MAP_GATE: rg failed for TODO/FIXME count", file=sys.stderr)
@@ -3091,7 +3091,7 @@ def _git_cached(cmd: list[str], cwd: str | None = None) -> str:
         return _git_cache[cache_key]
     try:
         result = _run_subprocess(cmd, cwd=cwd)
-        value = result.stdout.strip() if result.returncode == 0 else ""
+        value = os.fsdecode(result.stdout).strip() if result.returncode == 0 else ""
     except OSError:
         value = ""
     _git_cache[cache_key] = value
