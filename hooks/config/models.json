@@ -1,0 +1,51 @@
+{
+  "version": "1.3",
+  "updated": "2026-07-20",
+  "reviewers": {
+    "reviewer-grok": {
+      "model": "grok-4.5",
+      "label": "Correctness",
+      "platform_type": "generalPurpose"
+    },
+    "reviewer-codex": {
+      "model": "gpt-5.3-codex-high-fast",
+      "label": "Quality",
+      "platform_type": "generalPurpose"
+    },
+    "reviewer-gemini": {
+      "model": "gemini-3.1-pro",
+      "label": "Architecture",
+      "platform_type": "generalPurpose"
+    }
+  },
+  "roles": {
+    "coder": {
+      "model": "composer-2.5-fast",
+      "platform_type": "coder"
+    },
+    "architect": {
+      "model": "gpt-5.5-medium",
+      "platform_type": "architect"
+    },
+    "tester-writer": {
+      "model": "kimi-k2.7-code",
+      "platform_type": "tester-writer"
+    },
+    "commander": {
+      "model": "claude-opus-4-8-thinking-high",
+      "platform_type": "parent"
+    },
+    "commander-alt": {
+      "model": "claude-opus-4-6-thinking-high",
+      "platform_type": "parent"
+    },
+    "commander-light": {
+      "model": "claude-4-6-sonnet-medium-thinking",
+      "platform_type": "parent"
+    },
+    "heavy-reasoning": {
+      "model": "claude-opus-4-7-thinking-xhigh",
+      "platform_type": "generalPurpose"
+    }
+  }
+}

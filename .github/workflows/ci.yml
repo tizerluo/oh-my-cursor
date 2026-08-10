@@ -2,22 +2,37 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
   pull_request:
-    branches: [main]
+    branches: [main, master]
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Run unit tests
-        run: ./hooks/run_tests.sh
+      - name: Install tools
+        run: pip install ruff mypy coverage
+
+      - name: Lint
+        run: ruff check hooks/ tests/ scripts/ --select E,F,W --ignore E501
+
+      - name: Type check
+        run: mypy hooks/review_gate.py --ignore-missing-imports --no-error-summary
+
+      - name: Run tests
+        run: bash hooks/run_tests.sh
+
+      - name: Coverage
+        run: |
+          coverage run -m unittest discover -s tests -p "test_*.py" -t tests
+          coverage report --fail-under=70
 
       - name: Python compile check
         run: |
@@ -32,6 +47,18 @@ jobs:
           mkdir -p "$HOME"
           python3 scripts/install.py --copy --target "$HOME/.cursor"
           python3 scripts/install.py --doctor --security --target "$HOME/.cursor"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          home = Path(os.environ["HOME"])
+          models = home / ".cursor" / "hooks" / "config" / "models.json"
+          assert models.is_file(), models
+          data = json.loads(models.read_text(encoding="utf-8"))
+          reviewers = data.get("reviewers") or {}
+          for key in ("reviewer-grok", "reviewer-codex", "reviewer-gemini"):
+              assert key in reviewers, key
+          print("models.json reviewer keys OK")
+          PY
 
       - name: Install smoke (project copy)
         run: |

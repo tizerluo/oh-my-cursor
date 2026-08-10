@@ -38,7 +38,7 @@
     "subagentStart": [
       {
         "command": "python3 {{REVIEW_GATE_QUOTED_PATH}} set-role",
-        "matcher": "coder|architect|tester-writer|reviewer-grok|reviewer-codex|reviewer-gemini|explore|generalPurpose|planner",
+        "matcher": "[Cc]oder|[Aa]rchitect|[Tt]ester[-_]?[Ww]riter|[Rr]eviewer[-_]?[Gg]rok|[Rr]eviewer[-_]?[Cc]odex|[Rr]eviewer[-_]?[Gg]emini|[Ee]xplore|[Gg]eneral[-_]?[Pp]urpose|[Pp]lanner",
         "failClosed": true,
         "omc": true
       }
@@ -46,17 +46,7 @@
     "subagentStop": [
       {
         "command": "REVIEW_GATE_HOOK_MODE=subagentStop python3 {{REVIEW_GATE_QUOTED_PATH}} record-subagent",
-        "matcher": "coder",
-        "omc": true
-      },
-      {
-        "command": "REVIEW_GATE_HOOK_MODE=subagentStop python3 {{REVIEW_GATE_QUOTED_PATH}} record-subagent",
-        "matcher": "reviewer-grok|reviewer-codex|reviewer-gemini",
-        "omc": true
-      },
-      {
-        "command": "REVIEW_GATE_HOOK_MODE=subagentStop python3 {{REVIEW_GATE_QUOTED_PATH}} record-subagent",
-        "matcher": "architect|explore|generalPurpose|tester-writer|planner",
+        "matcher": "[Cc]oder|[Aa]rchitect|[Tt]ester[-_]?[Ww]riter|[Rr]eviewer[-_]?[Gg]rok|[Rr]eviewer[-_]?[Cc]odex|[Rr]eviewer[-_]?[Gg]emini|[Ee]xplore|[Gg]eneral[-_]?[Pp]urpose|[Pp]lanner",
         "omc": true
       }
     ],
@@ -70,6 +60,20 @@
     "sessionStart": [
       {
         "command": "python3 {{REVIEW_GATE_QUOTED_PATH}} session-resume",
+        "omc": true
+      }
+    ],
+    "preCompact": [
+      {
+        "command": "python3 {{REVIEW_GATE_QUOTED_PATH}} compact-inject",
+        "failClosed": false,
+        "omc": true
+      }
+    ],
+    "beforeMCPExecution": [
+      {
+        "command": "python3 {{REVIEW_GATE_QUOTED_PATH}} check-mcp-permission",
+        "failClosed": false,
         "omc": true
       }
     ]

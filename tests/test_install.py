@@ -73,9 +73,26 @@ class MergeHooksTests(unittest.TestCase):
         map_hooks = omc_install.render_map_hooks(gate)
         merged = omc_install.merge_hooks(existing, map_hooks, review_gate_path=gate)
         stop = merged["hooks"]["subagentStop"]
-        self.assertEqual(len(stop), 3)
+        self.assertEqual(len(stop), 1)
         self.assertTrue(all(omc_install.is_map_hook_entry(e, gate) for e in stop))
         self.assertTrue(all(e.get("omc") is True for e in stop))
+
+    def test_expected_map_hook_count_matches_template_dedupe(self):
+        gate = Path("/opt/omc/hooks/review_gate.py")
+        rendered = omc_install.render_map_hooks(gate)
+        expected = omc_install.expected_map_hook_count(gate)
+        raw = sum(
+            len(entries)
+            for entries in rendered.get("hooks", {}).values()
+            if isinstance(entries, list)
+        )
+        deduped = sum(
+            len(omc_install._dedupe_hook_entries(entries, gate))
+            for entries in rendered.get("hooks", {}).values()
+            if isinstance(entries, list)
+        )
+        self.assertEqual(raw, deduped)
+        self.assertEqual(expected, 11)
 
     def test_rendered_commands_are_quoted(self):
         gate = Path("/opt/with space/review_gate.py")
@@ -190,6 +207,66 @@ class InstallIntegrationTests(unittest.TestCase):
             restored = json.loads(hooks_json.read_text(encoding="utf-8"))
             self.assertEqual(restored, original)
 
+
+
+class DoctorModelsConfigTests(unittest.TestCase):
+    def test_doctor_passes_with_valid_models_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cursor_dir = Path(tmp) / ".cursor"
+            hooks = cursor_dir / "hooks"
+            hooks.mkdir(parents=True)
+            gate = hooks / "review_gate.py"
+            gate.write_text("# stub\n", encoding="utf-8")
+            config_dir = hooks / "config"
+            config_dir.mkdir()
+            (config_dir / "models.json").write_text(
+                json.dumps(
+                    {
+                        "reviewers": {
+                            "reviewer-grok": {"model": "grok-4.5"},
+                            "reviewer-codex": {"model": "gpt-5.3-codex-high-fast"},
+                            "reviewer-gemini": {"model": "gemini-3.1-pro"},
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (cursor_dir / "hooks.json").write_text(json.dumps({"hooks": {}}), encoding="utf-8")
+            (cursor_dir / "omc-install.json").write_text(
+                json.dumps(
+                    {
+                        "mode": "copy",
+                        "installed_at": "2026-01-01T00:00:00Z",
+                        "review_gate_path": str(gate),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.object(omc_install, "expected_map_hook_count", return_value=0):
+                rc = omc_install.run_doctor(cursor_dir)
+            self.assertEqual(rc, 0)
+
+    def test_doctor_fails_when_models_json_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cursor_dir = Path(tmp) / ".cursor"
+            hooks = cursor_dir / "hooks"
+            hooks.mkdir(parents=True)
+            gate = hooks / "review_gate.py"
+            gate.write_text("# stub\n", encoding="utf-8")
+            (cursor_dir / "hooks.json").write_text(json.dumps({"hooks": {}}), encoding="utf-8")
+            (cursor_dir / "omc-install.json").write_text(
+                json.dumps(
+                    {
+                        "mode": "copy",
+                        "installed_at": "2026-01-01T00:00:00Z",
+                        "review_gate_path": str(gate),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.object(omc_install, "expected_map_hook_count", return_value=0):
+                rc = omc_install.run_doctor(cursor_dir)
+            self.assertEqual(rc, 1)
 
 if __name__ == "__main__":
     unittest.main()

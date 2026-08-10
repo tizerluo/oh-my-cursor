@@ -8,7 +8,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 HOOKS_DIR = Path(__file__).resolve().parents[1] / "hooks"
 sys.path.insert(0, str(HOOKS_DIR))
@@ -64,7 +63,8 @@ class AdvanceFixQueueTests(unittest.TestCase):
             (root / ".review").mkdir()
             fq = root / ".review/fix-queue.json"
             fq.write_text(json.dumps({"p0_issues": [{"id": "a"}], "p1_issues": []}))
-            (root / ".review/progress.json").write_text(json.dumps({"phase": "x"}))
+            (root / ".review/progress.json").write_text(json.dumps({"phase": "fix-round-1"}))
+            (root / ".review/config.json").write_text(json.dumps({"workflow": "multi-agent-pr"}))
             result = rg.advance_fix_queue(root, mark_resolved_ids=["a"])
             self.assertEqual(result["queue_action"], "deleted")
             self.assertFalse(fq.exists())

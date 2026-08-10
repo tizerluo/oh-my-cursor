@@ -165,7 +165,7 @@ class TaskAlignmentTests(unittest.TestCase):
         payload = self._payload(
             tool_input={
                 "subagent_type": "reviewer-grok",
-                "model": "grok-build-0.1",
+                "model": "grok-4.5",
                 "prompt": "review code",
             },
         )
@@ -211,7 +211,7 @@ class ReviewerLogicalRoleInferenceTests(unittest.TestCase):
                     "subagent_id": "rev-1",
                     "tool_input": {
                         "prompt": "MAP Reviewer-Grok. logical_role: reviewer-grok",
-                        "model": "grok-build-0.1",
+                        "model": "grok-4.5",
                     },
                 }
             )
@@ -258,7 +258,7 @@ class RecordSubagentMarkerTests(unittest.TestCase):
                     "event": "subagentStop",
                     "subagent_type": "generalPurpose",
                     "subagent_id": "agent-42",
-                    "model": "grok-build-0.1",
+                    "model": "grok-4.5",
                     "cwd": str(root),
                 }
                 result = rg.record_subagent_from_hook(data, json.dumps(data))

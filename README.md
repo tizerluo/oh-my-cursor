@@ -197,6 +197,8 @@ sequenceDiagram
 | `subagentStop` | `record-subagent` | Write HMAC-sealed session marker |
 | `stop` | `stop-check` | Inject followup when queues are non-empty at stop phase |
 | `sessionStart` | `session-resume` | Inject resume context + routing recommendations |
+| `preCompact` | `compact-inject` | Inject MAP state summary before context compaction |
+| `beforeMCPExecution` | `check-mcp-permission` | Block write MCP tools for read-only roles |
 
 Secret for marker sealing: `HOOKS_DIR/.review-gate-secret` (or `OMC_SECRET_FILE`). See [docs/security.md](docs/security.md).
 

@@ -15,9 +15,9 @@ import tempfile
 import hashlib
 import hmac
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NoReturn, cast
 
 SESSION_DIR = ".review-session"
 SESSION_FILE = ".review-session.json"
@@ -35,6 +35,7 @@ SECURITY_QUEUE_FILE = "security-queue.json"
 ROLES_DIR = "roles"
 ROUTING_RULES_FILE = "routing-rules.json"
 HOOKS_DIR = Path(__file__).resolve().parent
+MODELS_CONFIG_FILE = HOOKS_DIR / "config" / "models.json"
 LEGACY_SECRET_FILE = Path.home() / ".cursor" / "hooks" / ".review-gate-secret"
 SPECS_DIR = ".specs"
 
@@ -56,6 +57,109 @@ def secret_file_path() -> Path:
     if env:
         return Path(env).expanduser().resolve()
     return HOOKS_DIR / ".review-gate-secret"
+
+
+WORKSPACE_CACHE_TTL_DAYS = 7
+
+
+def workspace_cache_file_path() -> Path:
+    """Per-conversation git root hint for hooks with empty workspace context (Cursor 3.15+)."""
+    env = os.environ.get("OMC_WORKSPACE_CACHE_FILE")
+    if env:
+        return Path(env).expanduser().resolve()
+    return HOOKS_DIR / ".workspace-cache.json"
+
+
+def _extract_conversation_id(data: dict[str, Any]) -> str:
+    for key in ("conversation_id", "conversationId", "session_id", "sessionId"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _parse_iso8601(value: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+
+
+def _empty_workspace_cache() -> dict[str, Any]:
+    return {"version": 1, "entries": {}}
+
+
+def _read_workspace_cache() -> dict[str, Any]:
+    try:
+        raw = _read_json_file(workspace_cache_file_path())
+        if not raw or raw.get("version") != 1:
+            return _empty_workspace_cache()
+        entries = raw.get("entries")
+        if not isinstance(entries, dict):
+            return _empty_workspace_cache()
+        return raw
+    except OSError:
+        return _empty_workspace_cache()
+
+
+def _lookup_workspace_cache(conversation_id: str) -> Path | None:
+    # Cache is a hint only; markers stay HMAC-sealed and branch/head-scoped.
+    if not conversation_id:
+        return None
+    try:
+        entry = _read_workspace_cache().get("entries", {}).get(conversation_id)
+        if not isinstance(entry, dict):
+            return None
+        # G2: 读取侧同样执行 7 天 TTL——过期或缺有效时间戳的条目在查找时直接忽略，
+        # 不再等到写入时才 prune。
+        updated_at = entry.get("updated_at")
+        ts = _parse_iso8601(updated_at) if isinstance(updated_at, str) else None
+        if ts is None:
+            return None
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=WORKSPACE_CACHE_TTL_DAYS)
+        if ts < cutoff:
+            return None
+        root = entry.get("root")
+        if not isinstance(root, str) or not root.strip():
+            return None
+        cached_root = Path(root).expanduser().resolve()
+        if _git_root(str(cached_root)) is None:
+            return None
+        return cached_root
+    except OSError:
+        return None
+
+
+def _upsert_workspace_cache(conversation_id: str, git_root: Path) -> None:
+    if not conversation_id:
+        return
+    try:
+        cache = _read_workspace_cache()
+        entries = cache.get("entries")
+        if not isinstance(entries, dict):
+            entries = {}
+        cutoff = datetime.now(timezone.utc) - timedelta(days=WORKSPACE_CACHE_TTL_DAYS)
+        pruned: dict[str, Any] = {}
+        for cid, entry in entries.items():
+            if not isinstance(entry, dict):
+                continue
+            updated_at = entry.get("updated_at")
+            if not isinstance(updated_at, str):
+                continue
+            ts = _parse_iso8601(updated_at)
+            if ts is not None and ts >= cutoff:
+                pruned[cid] = entry
+        pruned[conversation_id] = {
+            "root": str(git_root.resolve()),
+            "updated_at": _now_iso(),
+        }
+        cache["version"] = 1
+        cache["entries"] = pruned
+        _write_json_file(workspace_cache_file_path(), cache)
+    except OSError:
+        pass
 
 
 def _secret_fail(message: str) -> NoReturn:
@@ -245,6 +349,27 @@ MAP_MANAGED_ROLES = {
     "generalPurpose",
 }
 
+
+def _subagent_type_norm_key(value: str) -> str:
+    """Lowercase and strip separators for platform alias comparison."""
+    return re.sub(r"[-_]", "", value.lower())
+
+
+# Cursor 3.15+ may deliver hyphenated/lowercased lifecycle values (e.g. general-purpose).
+_SUBAGENT_TYPE_CANONICAL: dict[str, str] = {
+    _subagent_type_norm_key(t): t
+    for t in (*ALL_RECORDED_TYPES, *MAP_MANAGED_ROLES)
+}
+
+
+def _normalize_subagent_type(raw: str) -> str:
+    """Map platform subagent_type aliases to canonical MAP forms."""
+    stripped = raw.strip()
+    if not stripped:
+        return stripped
+    return _SUBAGENT_TYPE_CANONICAL.get(_subagent_type_norm_key(stripped), stripped)
+
+
 SPAWN_PHASE_RULES: dict[str, dict[str, list[str]]] = {
     "multi-agent-pr": {
         "coder": ["adjudication", "coding", "testing", "review-pending", "fix-round-*"],
@@ -348,6 +473,128 @@ WORKFLOW_STOP_PHASES: dict[str, str | None] = {
     "map-security": "report",
 }
 
+VALID_TRANSITIONS: dict[str, dict[str, list[str]]] = {
+    "multi-agent-pr": {
+        "config-confirmed": ["spec-writing"],
+        "spec-writing": ["architect-review"],
+        "architect-review": ["adjudication"],
+        "adjudication": ["coding"],
+        "coding": ["testing"],
+        "testing": ["review-pending"],
+        "review-pending": ["synthesis-complete"],
+        "synthesis-complete": ["fix-round-*", "merge-ready", "synthesis-complete"],
+        "fix-round-*": ["synthesis-complete", "review-pending"],
+        "merge-ready": ["merged", "cleanup"],
+    },
+    "map-hyperplan": {
+        "config-confirmed": ["draft"],
+        "draft": ["critics"],
+        "critics": ["debate"],
+        "debate": ["revise", "accepted"],
+        "revise": ["debate", "accepted"],
+    },
+    "map-security": {
+        "config-confirmed": ["scope"],
+        "scope": ["hunt"],
+        "hunt": ["triage"],
+        "triage": ["poc"],
+        "poc": ["report"],
+    },
+    "map-refactor": {
+        "config-confirmed": ["analysis"],
+        "analysis": ["baseline"],
+        "baseline": ["implement"],
+        "implement": ["regression"],
+        "regression": ["review-pending", "fix-round-*", "regression"],
+        "fix-round-*": ["regression"],
+        "review-pending": ["synthesis-complete"],
+        "synthesis-complete": ["merge-ready", "fix-round-*", "synthesis-complete"],
+        "merge-ready": ["merged", "cleanup"],
+    },
+}
+
+
+class PhaseTransitionError(Exception):
+    def __init__(self, workflow: str, current: str, target: str) -> None:
+        self.workflow = workflow
+        self.current = current
+        self.target = target
+        super().__init__(
+            f"invalid phase transition: {current!r} -> {target!r} "
+            f"in workflow {workflow!r}"
+        )
+
+
+def validate_phase_transition(workflow: str, current: str, target: str) -> bool:
+    """Check if a phase transition is allowed. Returns True if valid."""
+    transitions = VALID_TRANSITIONS.get(workflow)
+    if transitions is None:
+        return True
+    if not current:
+        return True
+    allowed: list[str] = []
+    matched_current = False
+    for phase_key, targets in transitions.items():
+        if fnmatch.fnmatch(current, phase_key):
+            matched_current = True
+            allowed.extend(targets)
+    if not matched_current:
+        return False
+    return any(fnmatch.fnmatch(target, pattern) for pattern in allowed)
+
+
+def _fix_queue_advance_target_phase(workflow: str) -> str:
+    """Return the progress phase to set after advancing the fix queue."""
+    if workflow == "map-refactor":
+        return "regression"
+    return "synthesis-complete"
+
+
+def safe_transition_phase(
+    git_root: Path,
+    workflow: str,
+    target_phase: str,
+    *,
+    force: bool = False,
+) -> bool:
+    """Validate and set phase in progress.json. Returns True if transitioned."""
+    progress_path = _review_path(git_root, PROGRESS_FILE)
+    progress = _read_json_file(progress_path) or {}
+    current = str(progress.get("phase") or "")
+    if not force and current and not validate_phase_transition(workflow, current, target_phase):
+        raise PhaseTransitionError(workflow, current, target_phase)
+    progress["phase"] = target_phase
+    progress["updated_at"] = _now_iso()
+    _write_json_file(progress_path, progress)
+    return True
+
+
+def repair_phase_state(
+    git_root: Path,
+    workflow: str,
+    progress: dict[str, Any],
+    markers: list[dict[str, Any]],
+) -> str | None:
+    """Detect inconsistent phase state and suggest repair. Returns new phase or None."""
+    current = str(progress.get("phase") or "")
+    completed = _completed_types(markers, ALL_RECORDED_TYPES)
+
+    if workflow == "multi-agent-pr":
+        if current == "coding" and "coder" in completed:
+            return "testing"
+        if current == "testing" and "tester-writer" in completed:
+            return "review-pending"
+        if current == "review-pending" and REVIEWER_TYPES.issubset(completed):
+            return "synthesis-complete"
+
+    elif workflow == "map-refactor":
+        if current == "implement" and "coder" in completed:
+            return "regression"
+        if current == "regression" and "tester-writer" in completed:
+            return "review-pending"
+
+    return None
+
 ROUTING_RULES_FALLBACK = (
     HOOKS_DIR.parent / "skills" / "multi-agent-pr" / "routing-rules.example.json"
 )
@@ -427,7 +674,12 @@ def _extract_command(data: dict[str, Any]) -> str:
     return ""
 
 
-def _extract_cwd(data: dict[str, Any]) -> str:
+def _extract_explicit_cwd(data: dict[str, Any]) -> str:
+    """Payload-carried workspace hint only; '' when the event has none.
+
+    G2: Cursor 3.15+ 的 subagentStop 等事件常带空 workspace_roots 且无 cwd。
+    只有事件显式携带的 cwd/roots 才允许回写 workspace cache，防止污染。
+    """
     tool_input = data.get("tool_input")
     if not isinstance(tool_input, dict):
         tool_input = {}
@@ -444,6 +696,13 @@ def _extract_cwd(data: dict[str, Any]) -> str:
     roots = data.get("workspace_roots")
     if isinstance(roots, list) and roots and isinstance(roots[0], str) and roots[0].strip():
         return roots[0]
+    return ""
+
+
+def _extract_cwd(data: dict[str, Any]) -> str:
+    explicit = _extract_explicit_cwd(data)
+    if explicit:
+        return explicit
     return os.getcwd()
 
 
@@ -468,6 +727,9 @@ def _extract_subagent_fields(data: dict[str, Any]) -> tuple[str, str, str]:
         if isinstance(value, str) and value.strip():
             subagent_id = value.strip()
             break
+
+    if subagent_type:
+        subagent_type = _normalize_subagent_type(subagent_type)
 
     return subagent_type, model, subagent_id
 
@@ -527,44 +789,20 @@ def _event_looks_like_subagent_stop(data: dict[str, Any]) -> bool:
 
 
 def _git_root(cwd: str) -> Path | None:
-    try:
-        result = _run_subprocess(["git", "-C", cwd, "rev-parse", "--show-toplevel"])
-        if result.returncode != 0:
-            return None
-        root = result.stdout.strip()
-        return Path(root) if root else None
-    except OSError:
-        return None
+    root = _git_cached(["git", "-C", cwd, "rev-parse", "--show-toplevel"])
+    return Path(root) if root else None
 
 
 def _git_branch(cwd: str) -> str:
-    try:
-        result = _run_subprocess(["git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"])
-        if result.returncode != 0:
-            return ""
-        return result.stdout.strip()
-    except OSError:
-        return ""
+    return _git_cached(["git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"])
 
 
 def _git_head(cwd: str) -> str:
-    try:
-        result = _run_subprocess(["git", "-C", cwd, "rev-parse", "HEAD"])
-        if result.returncode != 0:
-            return ""
-        return result.stdout.strip()
-    except OSError:
-        return ""
+    return _git_cached(["git", "-C", cwd, "rev-parse", "HEAD"])
 
 
 def _git_tree(cwd: str) -> str:
-    try:
-        result = _run_subprocess(["git", "-C", cwd, "rev-parse", "HEAD^{tree}"])
-        if result.returncode != 0:
-            return ""
-        return result.stdout.strip()
-    except OSError:
-        return ""
+    return _git_cached(["git", "-C", cwd, "rev-parse", "HEAD^{tree}"])
 
 
 def _git_diff_files(cwd: str) -> list[str]:
@@ -574,13 +812,13 @@ def _git_diff_files(cwd: str) -> list[str]:
         if merge_base.returncode != 0 or not merge_base.stdout.strip():
             continue
         result = _run_subprocess(
-            ["git", "-C", cwd, "diff", "--name-only", merge_base.stdout.strip(), "HEAD"]
+            ["git", "-C", cwd, "diff", "--name-only", os.fsdecode(merge_base.stdout).strip(), "HEAD"]
         )
         if result.returncode == 0:
-            return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+            return [line.strip() for line in os.fsdecode(result.stdout).splitlines() if line.strip()]
     result = _run_subprocess(["git", "-C", cwd, "diff", "--name-only", "HEAD~1", "HEAD"])
     if result.returncode == 0:
-        return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        return [line.strip() for line in os.fsdecode(result.stdout).splitlines() if line.strip()]
     return []
 
 
@@ -618,16 +856,37 @@ def load_config(git_root: Path) -> dict[str, Any] | None:
 
 
 def load_map_context(data: dict[str, Any]) -> dict[str, Any] | None:
-    cwd = _extract_cwd(data)
-    git_root = _git_root(cwd)
+    conversation_id = _extract_conversation_id(data)
+    explicit_cwd = _extract_explicit_cwd(data)
+    git_root: Path | None = None
+    effective_cwd = ""
+    if explicit_cwd:
+        # 事件自带 workspace 上下文：以它为准，且允许回写缓存。
+        git_root = _git_root(explicit_cwd)
+        effective_cwd = explicit_cwd
+    if git_root is None:
+        # 空 workspace_roots / 无 cwd 的事件：优先读缓存，避免 hook 进程
+        # 自身 cwd 落在别的仓库时把错误 root 写进缓存（G2 防污染）。
+        cached = _lookup_workspace_cache(conversation_id)
+        if cached is not None:
+            git_root = cached
+            effective_cwd = str(cached)
+    if git_root is None and not explicit_cwd:
+        # 最后手段：hook 进程自身 cwd。只用于解析，绝不回写缓存。
+        fallback_cwd = os.getcwd()
+        git_root = _git_root(fallback_cwd)
+        if git_root is not None:
+            effective_cwd = fallback_cwd
     if git_root is None:
         return None
+    if explicit_cwd:
+        _upsert_workspace_cache(conversation_id, git_root)
     branch = _git_branch(str(git_root))
     head_sha = _git_head(str(git_root))
     if not branch or not head_sha:
         return None
     return {
-        "cwd": cwd,
+        "cwd": effective_cwd,
         "git_root": git_root,
         "branch": branch,
         "head_sha": head_sha,
@@ -906,7 +1165,7 @@ def _task_subagent_type(data: dict[str, Any]) -> str:
     for key in ("subagent_type", "subagentType"):
         value = tool_input.get(key)
         if isinstance(value, str) and value.strip():
-            return value.strip()
+            return _normalize_subagent_type(value.strip())
     return _extract_subagent_fields(data)[0]
 
 
@@ -1151,7 +1410,7 @@ def _validate_config_cross_check(
         return (
             False,
             f"Config tier {config_tier} below enforced minimum {minimum_tier}.",
-            f"BLOCKED: config tier mismatch with diff inference.",
+            "BLOCKED: config tier mismatch with diff inference.",
         )
     if _tier_rank(verdict_tier) < _tier_rank(config_tier):
         return (
@@ -1314,7 +1573,7 @@ def validate_review_state(
         return (
             False,
             "Review verdict tree mismatch.",
-            f"BLOCKED: verdict tree_sha mismatch.",
+            "BLOCKED: verdict tree_sha mismatch.",
         )
 
     tier = str(verdict.get("tier") or "standard").lower()
@@ -1348,7 +1607,7 @@ def validate_review_state(
             return (
                 False,
                 f"Missing required reviewer subagents: {', '.join(missing)}.",
-                f"BLOCKED: Standard/Large requires all three reviewers.",
+                "BLOCKED: Standard/Large requires all three reviewers.",
             )
 
     completed_implementers = _completed_types(markers, IMPLEMENTER_TYPES)
@@ -1359,8 +1618,8 @@ def validate_review_state(
             "BLOCKED: use Task(subagent_type='coder').",
         )
 
-    p0 = verdict.get("p0")
-    p1 = verdict.get("p1")
+    p0: Any = verdict.get("p0")
+    p1: Any = verdict.get("p1")
     try:
         if int(p0) > 0 or int(p1) > 0:
             return (
@@ -1435,6 +1694,181 @@ def check_merge_from_hook(data: dict[str, Any]) -> dict[str, Any]:
     return {"permission": "deny", "user_message": user_message, "agent_message": agent_message}
 
 
+class QueueManager:
+    """Unified queue interface for fix, critic, and security queues."""
+
+    def __init__(self, git_root: Path, queue_file: str) -> None:
+        self._path = _review_path(git_root, queue_file)
+        self._git_root = git_root
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    def load(self) -> dict[str, Any] | None:
+        return _read_json_file(self._path)
+
+    def save(self, data: dict[str, Any]) -> None:
+        data["updated_at"] = _now_iso()
+        _write_json_file(self._path, data)
+
+    def is_empty(self) -> bool:
+        data = self.load()
+        if data is None:
+            return True
+        return not any(self._item_keys_values(data))
+
+    def delete(self) -> None:
+        if self._path.is_file():
+            self._path.unlink()
+
+    def _item_keys_values(self, data: dict[str, Any]) -> list[list[dict[str, Any]]]:
+        raise NotImplementedError
+
+    def _item_count(self, data: dict[str, Any]) -> int:
+        return sum(len(v) for v in self._item_keys_values(data))
+
+
+class FixQueue(QueueManager):
+    """Fix queue: tracks P0/P1 issues across fix-review rounds."""
+
+    def __init__(self, git_root: Path) -> None:
+        super().__init__(git_root, FIX_QUEUE_FILE)
+
+    def _item_keys_values(self, data: dict[str, Any]) -> list[list[dict[str, Any]]]:
+        return [_issue_list(data, "p0_issues"), _issue_list(data, "p1_issues")]
+
+    def p0_count(self) -> int:
+        data = self.load()
+        if not data:
+            return 0
+        return len(_issue_list(data, "p0_issues"))
+
+    def p1_count(self) -> int:
+        data = self.load()
+        if not data:
+            return 0
+        return len(_issue_list(data, "p1_issues"))
+
+    def total_count(self) -> int:
+        return self.p0_count() + self.p1_count()
+
+    def resolve_ids(self, resolved_ids: set[str]) -> None:
+        data = self.load()
+        if data is None:
+            return
+        data["p0_issues"] = _filter_resolved_issues(_issue_list(data, "p0_issues"), resolved_ids)
+        data["p1_issues"] = _filter_resolved_issues(_issue_list(data, "p1_issues"), resolved_ids)
+        if not data["p0_issues"] and not data["p1_issues"]:
+            self.delete()
+        else:
+            self.save(data)
+
+    def increment_round(self) -> int:
+        data = self.load() or {}
+        new_round = int(data.get("round") or 0) + 1
+        data["round"] = new_round
+        self.save(data)
+        return new_round
+
+    def scope_check(self, branch: str, head_sha: str) -> bool:
+        data = self.load()
+        if not data:
+            return False
+        return data.get("branch") == branch and data.get("head_sha") == head_sha
+
+
+class CriticQueue(QueueManager):
+    """Critic queue: tracks pending critic items for hyperplan debate."""
+
+    def __init__(self, git_root: Path) -> None:
+        super().__init__(git_root, CRITIC_QUEUE_FILE)
+
+    def _item_keys_values(self, data: dict[str, Any]) -> list[list[dict[str, Any]]]:
+        items = data.get("pending_items") or []
+        return [items] if isinstance(items, list) else []
+
+    def pending_count(self) -> int:
+        data = self.load()
+        if not data:
+            return 0
+        items = data.get("pending_items") or []
+        return len(items) if isinstance(items, list) else 0
+
+    def resolve_ids(self, resolved_ids: set[str]) -> None:
+        data = self.load()
+        if data is None:
+            return
+        pending = data.get("pending_items") or []
+        if not isinstance(pending, list):
+            pending = []
+        data["pending_items"] = _filter_critic_pending(pending, resolved_ids)
+        if not data["pending_items"]:
+            self.delete()
+        else:
+            self.save(data)
+
+    def increment_round(self) -> int:
+        data = self.load() or {}
+        new_round = int(data.get("round") or 1) + 1
+        data["round"] = new_round
+        self.save(data)
+        return new_round
+
+
+class SecurityQueue(QueueManager):
+    """Security queue: tracks unverified High+ findings with fingerprint dedup."""
+
+    def __init__(self, git_root: Path) -> None:
+        super().__init__(git_root, SECURITY_QUEUE_FILE)
+
+    def _item_keys_values(self, data: dict[str, Any]) -> list[list[dict[str, Any]]]:
+        items = data.get("pending_findings") or []
+        return [items] if isinstance(items, list) else []
+
+    def pending_count(self) -> int:
+        data = self.load()
+        if not data:
+            return 0
+        items = data.get("pending_findings") or []
+        return len(items) if isinstance(items, list) else 0
+
+    def existing_fingerprints(self) -> set[str]:
+        data = self.load()
+        if not data:
+            return set()
+        items = data.get("pending_findings") or []
+        return cast(set[str], {item.get("fingerprint") for item in items if isinstance(item, dict)})
+
+    def append_findings(self, findings: list[dict[str, Any]], *, session_id: str) -> int:
+        data = self.load() or {
+            "schema_version": 1,
+            "session_id": session_id,
+            "pending_findings": [],
+        }
+        pending = data.get("pending_findings") or []
+        if not isinstance(pending, list):
+            pending = []
+        existing = {item.get("fingerprint") for item in pending if isinstance(item, dict)}
+        added = 0
+        for finding in findings:
+            if not isinstance(finding, dict):
+                continue
+            severity = str(finding.get("severity") or "").lower()
+            verified = finding.get("verified") is True
+            if verified or severity not in {"high", "critical", "p0", "p1"}:
+                continue
+            fp = security_fingerprint(finding)
+            if fp in existing:
+                continue
+            pending.append({**finding, "fingerprint": fp, "verified": False})
+            existing.add(fp)
+            added += 1
+        data["pending_findings"] = pending
+        self.save(data)
+        return added
+
+
 def _issue_list(fix_queue: dict[str, Any], key: str) -> list[dict[str, Any]]:
     items = fix_queue.get(key) or []
     if not isinstance(items, list):
@@ -1463,38 +1897,55 @@ def advance_fix_queue(
     increment_round: bool = False,
     head_sha: str | None = None,
     branch: str | None = None,
+    force_phase: bool = False,
 ) -> dict[str, Any]:
     """After a fix-review cycle: drop resolved issues, reset phase for stop hook."""
-    fix_path = _review_path(git_root, FIX_QUEUE_FILE)
-    fix_queue = _read_json_file(fix_path)
+    fix_q = FixQueue(git_root)
+    fix_queue = fix_q.load()
     if fix_queue is None:
         return {"ok": False, "reason": "fix-queue missing"}
 
     resolved = {str(i) for i in (mark_resolved_ids or [])}
+    # 预演剩余条目以确定队列动作与返回计数；真正的过滤/轮次改写必须
+    # 委托给 FixQueue 类方法，保证语义只有一处实现（G4）。
     p0 = _filter_resolved_issues(_issue_list(fix_queue, "p0_issues"), resolved)
     p1 = _filter_resolved_issues(_issue_list(fix_queue, "p1_issues"), resolved)
-    fix_queue["p0_issues"] = p0
-    fix_queue["p1_issues"] = p1
-
-    if increment_round:
-        fix_queue["round"] = int(fix_queue.get("round") or 0) + 1
-    if head_sha:
-        fix_queue["head_sha"] = head_sha
-    if branch:
-        fix_queue["branch"] = branch
-    fix_queue["updated_at"] = _now_iso()
-
-    if not p0 and not p1:
-        if fix_path.is_file():
-            fix_path.unlink()
-        queue_action = "deleted"
-    else:
-        _write_json_file(fix_path, fix_queue)
-        queue_action = "updated"
+    queue_action = "updated" if (p0 or p1) else "deleted"
 
     progress_path = _review_path(git_root, PROGRESS_FILE)
     progress = _read_json_file(progress_path) or {}
-    progress["phase"] = "synthesis-complete"
+    config_path = _review_path(git_root, CONFIG_FILE)
+    config = _read_json_file(config_path) or {}
+    workflow = str(config.get("workflow") or "multi-agent-pr")
+    target_phase = _fix_queue_advance_target_phase(workflow)
+    current_phase = str(progress.get("phase") or "")
+    # G5: 先做阶段迁移校验/写入；一旦抛出 PhaseTransitionError，
+    # 队列文件保持原样，不会出现"已解决条目被删但进度未迁移"的丢失。
+    if current_phase != target_phase:
+        if force_phase:
+            print(
+                f"WARNING: forcing phase transition {current_phase!r} -> {target_phase!r} "
+                f"in workflow {workflow!r}",
+                file=sys.stderr,
+            )
+            safe_transition_phase(git_root, workflow, target_phase, force=True)
+        else:
+            safe_transition_phase(git_root, workflow, target_phase)
+
+    fix_q.resolve_ids(resolved)
+    queue_round: Any = fix_queue.get("round")
+    if queue_action == "updated":
+        if increment_round:
+            queue_round = fix_q.increment_round()
+        if head_sha or branch:
+            data = fix_q.load() or {}
+            if head_sha:
+                data["head_sha"] = head_sha
+            if branch:
+                data["branch"] = branch
+            fix_q.save(data)
+
+    progress = _read_json_file(progress_path) or {}
     if head_sha:
         progress["head_sha"] = head_sha
     if branch:
@@ -1504,7 +1955,8 @@ def advance_fix_queue(
     progress["updated_at"] = _now_iso()
     _write_json_file(progress_path, progress)
 
-    queue_round = fix_queue.get("round") if queue_action == "updated" else None
+    if queue_action != "updated":
+        queue_round = None
     progress_fix_round = int(progress.get("fix_round") or 0)
     return {
         "ok": True,
@@ -1518,6 +1970,21 @@ def advance_fix_queue(
     }
 
 
+def _filter_critic_pending(
+    pending: list[Any], resolved_ids: set[str]
+) -> list[dict[str, Any]]:
+    """过滤已解决的 critic 条目；CriticQueue 与 advance 预览共用同一实现。"""
+    kept: list[dict[str, Any]] = []
+    for item in pending:
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("id") or item.get("dimension") or "")
+        if item_id and item_id in resolved_ids:
+            continue
+        kept.append(item)
+    return kept
+
+
 def advance_critic_queue(
     git_root: Path,
     *,
@@ -1525,28 +1992,18 @@ def advance_critic_queue(
     increment_round: bool = False,
 ) -> dict[str, Any]:
     """Hyperplan: remove resolved critic items; optionally bump round."""
-    critic_path = _review_path(git_root, CRITIC_QUEUE_FILE)
-    critic_queue = _read_json_file(critic_path)
+    critic_q = CriticQueue(git_root)
+    critic_queue = critic_q.load()
     if critic_queue is None:
         return {"ok": False, "reason": "critic-queue missing"}
 
     resolved = {str(i) for i in (mark_resolved_ids or [])}
+    # 预演 kept 以确定目标阶段与验收门槛；队列改写委托给 CriticQueue（G4）。
     pending = critic_queue.get("pending_items") or []
     if not isinstance(pending, list):
         pending = []
-    kept = []
-    for item in pending:
-        if not isinstance(item, dict):
-            continue
-        item_id = str(item.get("id") or item.get("dimension") or "")
-        if item_id and item_id in resolved:
-            continue
-        kept.append(item)
-    critic_queue["pending_items"] = kept
+    kept = _filter_critic_pending(pending, resolved)
     queue_round = critic_queue.get("round")
-    if increment_round:
-        critic_queue["round"] = int(critic_queue.get("round") or 1) + 1
-    critic_queue["updated_at"] = _now_iso()
 
     config_path = _review_path(git_root, CONFIG_FILE)
     config = _read_json_file(config_path) or {}
@@ -1568,23 +2025,20 @@ def advance_critic_queue(
         if not debate_ok:
             return {"ok": False, "reason": f"debate report invalid: {debate_msg}"}
 
-    if not kept:
-        if critic_path.is_file():
-            critic_path.unlink()
-        action = "deleted"
-    else:
-        _write_json_file(critic_path, critic_queue)
-        action = "updated"
-
     progress_path = _review_path(git_root, PROGRESS_FILE)
     progress = _read_json_file(progress_path) or {}
-    if kept:
-        progress["phase"] = "revise"
-    else:
-        progress["phase"] = "accepted"
-    progress["updated_at"] = _now_iso()
-    _write_json_file(progress_path, progress)
+    target_phase = "revise" if kept else "accepted"
+    current_phase = str(progress.get("phase") or "")
+    # G5: 阶段迁移先于队列落盘；迁移抛错时队列文件保持原样。
+    if current_phase != target_phase:
+        safe_transition_phase(git_root, "map-hyperplan", target_phase)
 
+    critic_q.resolve_ids(resolved)
+    action = "updated" if kept else "deleted"
+    if increment_round and kept:
+        critic_q.increment_round()
+
+    progress = _read_json_file(progress_path) or {}
     result: dict[str, Any] = {
         "ok": True,
         "queue_action": action,
@@ -1593,17 +2047,16 @@ def advance_critic_queue(
     }
 
     if not kept:
-        config_path = _review_path(git_root, CONFIG_FILE)
-        config = _read_json_file(config_path)
-        if config and str(config.get("workflow") or "") == "map-hyperplan":
+        fresh_config = _read_json_file(config_path)
+        if fresh_config and str(fresh_config.get("workflow") or "") == "map-hyperplan":
             queue_session_id = critic_queue.get("session_id")
-            config_session_id = config.get("session_id")
+            config_session_id = fresh_config.get("session_id")
             if queue_session_id and queue_session_id != config_session_id:
                 result["deactivate_skipped"] = "session_mismatch"
             else:
-                config["active"] = False
-                config["deactivated_at"] = _now_iso()
-                _write_json_file(config_path, config)
+                fresh_config["active"] = False
+                fresh_config["deactivated_at"] = _now_iso()
+                _write_json_file(config_path, fresh_config)
                 result["deactivated"] = True
 
     return result
@@ -1808,7 +2261,7 @@ def _count_todo_fixme_threshold(git_root: Path, threshold: int) -> bool:
             elif shutil.which("rg") is None:
                 print("MAP_GATE: rg not found; skipping TODO/FIXME routing hint", file=sys.stderr)
             return False
-        total = sum(int(line.split(":")[-1]) for line in result.stdout.splitlines() if ":" in line)
+        total = sum(int(line.split(":")[-1]) for line in os.fsdecode(result.stdout).splitlines() if ":" in line)
         return total >= threshold
     except OSError:
         print("MAP_GATE: rg failed for TODO/FIXME count", file=sys.stderr)
@@ -2002,7 +2455,7 @@ def _routing_hints(
     if _count_todo_fixme_threshold(git_root, thresholds["todo_fixme_count"]):
         hints.append("High TODO/FIXME count; consider map-refactor.")
     hyperplan_signals = re.search(
-        r"\b(hyperplan|map-hyperplan|写个 spec|架构|方案|debate)\b", user_text, re.I
+        r"(hyperplan|map-hyperplan|写个\s*spec|架构|方案|debate)", user_text, re.I
     )
     if hyperplan_signals and not (config and config.get("active")):
         hints.append(
@@ -2041,17 +2494,49 @@ def session_resume_from_hook(data: dict[str, Any]) -> dict[str, Any]:
     return {"additional_context": "\n".join(parts)}
 
 
-_REVIEWER_MODEL_MAP: dict[str, str] = {
-    "grok-build-0.1": "reviewer-grok",
-    "gpt-5.3-codex-high-fast": "reviewer-codex",
-    "gemini-3.1-pro": "reviewer-gemini",
-}
-
-_REVIEWER_SPAWN_MODELS: dict[str, str] = {
-    "reviewer-grok": "grok-build-0.1",
+_FALLBACK_REVIEWERS: dict[str, str] = {
+    "reviewer-grok": "grok-4.5",
     "reviewer-codex": "gpt-5.3-codex-high-fast",
     "reviewer-gemini": "gemini-3.1-pro",
 }
+
+_models_cache: dict[str, Any] | None = None
+
+
+def _load_models_config() -> dict[str, Any]:
+    global _models_cache
+    if _models_cache is not None:
+        return _models_cache
+    try:
+        with open(MODELS_CONFIG_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        _models_cache = data
+    except (OSError, json.JSONDecodeError):
+        _models_cache = {"reviewers": {k: {"model": v} for k, v in _FALLBACK_REVIEWERS.items()}, "roles": {}}
+    return _models_cache
+
+
+def _reset_models_cache() -> None:
+    global _models_cache
+    _models_cache = None
+
+
+def _build_reviewer_model_map() -> dict[str, str]:
+    spawn = _build_reviewer_spawn_models()
+    return {model: role for role, model in spawn.items()}
+
+
+def _build_reviewer_spawn_models() -> dict[str, str]:
+    cfg = _load_models_config()
+    reviewers = cfg.get("reviewers", {})
+    if not isinstance(reviewers, dict):
+        reviewers = {}
+    result: dict[str, str] = {}
+    for role, fallback_model in _FALLBACK_REVIEWERS.items():
+        info = reviewers.get(role, {})
+        model = info.get("model", "") if isinstance(info, dict) else ""
+        result[role] = model if model else fallback_model
+    return result
 
 
 def _infer_reviewer_logical_role(model: str, prompt: str) -> str | None:
@@ -2063,8 +2548,8 @@ def _infer_reviewer_logical_role(model: str, prompt: str) -> str | None:
     match = re.search(r"Reviewer-(Grok|Codex|Gemini)", text, re.I)
     if match:
         return f"reviewer-{match.group(1).lower()}"
-    if model in _REVIEWER_MODEL_MAP:
-        return _REVIEWER_MODEL_MAP[model]
+    if model in _build_reviewer_model_map():
+        return _build_reviewer_model_map()[model]
     return None
 
 
@@ -2087,7 +2572,7 @@ def _subagent_start_model(data: dict[str, Any], fallback: str = "") -> str:
 
 
 def _reviewer_spawn_template(logical_role: str) -> str:
-    model = _REVIEWER_SPAWN_MODELS.get(logical_role, "<reviewer-model>")
+    model = _build_reviewer_spawn_models().get(logical_role, "<reviewer-model>")
     engine = logical_role.removeprefix("reviewer-").capitalize()
     return (
         f'Task(subagent_type="generalPurpose", model="{model}", readonly=true, '
@@ -2140,7 +2625,6 @@ def set_role_from_hook(data: dict[str, Any]) -> dict[str, Any]:
             if spawn_model and not model:
                 model = spawn_model
 
-    workflow = str(config.get("workflow") or "multi-agent-pr")
     progress = ctx["progress"] or {}
 
     role_file = _review_path(ctx["git_root"], ROLES_DIR) / f"{_slug(subagent_id)}.json"
@@ -2186,6 +2670,43 @@ def _role_for_permission(ctx: dict[str, Any], data: dict[str, Any]) -> tuple[str
         or ""
     )
     return role, role_data
+
+
+def _is_root_transcript_path(transcript: str) -> bool:
+    """True only for the genuine Cursor root-conversation transcript shape.
+
+    G3: 根会话 transcript 形态为
+    ``<Cursor projects 目录>/agent-transcripts/<id>/<id>.jsonl``
+    （文件名去掉 .jsonl 必须与父目录同名，且位于 .cursor/projects 之下）；
+    含 /subagents/ 的是子代理，/tmp 之类的任意路径一律不算 Commander。
+    """
+    norm = transcript.replace("\\", "/")
+    if "/subagents/" in norm:
+        return False
+    parts = [p for p in norm.split("/") if p]
+    if len(parts) < 6 or parts[-3] != "agent-transcripts":
+        return False
+    filename = parts[-1]
+    if not filename.endswith(".jsonl"):
+        return False
+    if filename[: -len(".jsonl")] != parts[-2]:
+        return False
+    prefix = parts[:-3]
+    return any(
+        prefix[i] == ".cursor" and prefix[i + 1] == "projects"
+        for i in range(len(prefix) - 1)
+    )
+
+
+def _is_commander_session(data: dict[str, Any]) -> bool:
+    """True for the parent Commander session (not a subagent transcript)."""
+    _, _, subagent_id = _extract_subagent_fields(data)
+    if subagent_id:
+        return False
+    transcript = _extract_transcript_path(data)
+    if not transcript:
+        return False
+    return _is_root_transcript_path(transcript)
 
 
 def check_tool_permission_from_hook(data: dict[str, Any]) -> dict[str, Any]:
@@ -2259,10 +2780,24 @@ def check_tool_permission_from_hook(data: dict[str, Any]) -> dict[str, Any]:
         }
 
     if role == "":
+        if _is_commander_session(data):
+            if _path_allowed(norm_path, [".review/", ".specs/"], git_root):
+                return {"permission": "allow"}
+            return {
+                "permission": "deny",
+                "user_message": "Commander may only Write/Delete under .review/ and .specs/.",
+                "agent_message": (
+                    "BLOCKED: Commander cannot edit implementation files; "
+                    "spawn a coder subagent for hooks/, scripts/, tests/, etc."
+                ),
+            }
         return {
             "permission": "deny",
             "user_message": "Write/Delete blocked: no MAP role assigned.",
-            "agent_message": "BLOCKED: active MAP session requires subagentStart role assignment.",
+            "agent_message": (
+                "BLOCKED: subagent without role file cannot Write/Delete. "
+                "Commander may write .review/ and .specs/ only."
+            ),
         }
 
     if role == "generalPurpose" and workflow == "map-hyperplan":
@@ -2456,6 +2991,117 @@ def record_subagent_from_hook(data: dict[str, Any], raw: str) -> dict[str, Any]:
     return {}
 
 
+def compact_inject(data: dict[str, Any]) -> dict[str, Any]:
+    """preCompact hook: inject MAP state summary before context compaction."""
+    ctx = load_map_context(data)
+    if ctx is None:
+        return {}
+    git_root = ctx["git_root"]
+    config = ctx["config"]
+    progress = ctx["progress"]
+    if not config or not config.get("active"):
+        return {}
+    parts: list[str] = []
+    workflow = config.get("workflow", "multi-agent-pr")
+    session_id = config.get("session_id", "?")
+    phase = progress.get("phase") if progress else "?"
+    completed = progress.get("completed") if progress else []
+    parts.append(f"[MAP] workflow={workflow} session={session_id} phase={phase}")
+    if completed:
+        parts.append(f"  completed subagents: {', '.join(str(c) for c in completed)}")
+    for qfile, label in [
+        (FIX_QUEUE_FILE, "fix-queue"),
+        (CRITIC_QUEUE_FILE, "critic-queue"),
+        (SECURITY_QUEUE_FILE, "security-queue"),
+    ]:
+        qdata = _read_json_file(_review_path(git_root, qfile))
+        if qdata is not None:
+            parts.append(f"  {label}: active (see .review/{qfile})")
+    return {"additional_context": "\n".join(parts)}
+
+
+_MCP_WRITE_VERBS = frozenset({
+    "write",
+    "create",
+    "update",
+    "delete",
+    "insert",
+    "remove",
+    "edit",
+    "modify",
+    "put",
+    "patch",
+    "append",
+    "set",
+    "add",
+})
+
+
+def _tokenize_mcp_tool_name(tool_name: str) -> list[str]:
+    """Split MCP tool names on separators and camelCase boundaries."""
+    if not tool_name:
+        return []
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", tool_name)
+    spaced = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", spaced)
+    tokens: list[str] = []
+    for chunk in re.split(r"[_\-.]+", spaced):
+        for part in chunk.split():
+            if part:
+                tokens.append(part.lower())
+    return tokens
+
+
+def _mcp_tool_is_write(tool_name: str) -> bool:
+    # 已知限制：全小写连写的动词（如 "createpage"）没有分隔符或 camelCase 边界，
+    # 分词后不会命中动词表，因此这类工具名识别不到写语义；
+    # 该门仅是防御纵深的一层，最终仍以角色 Write/Delete 权限为兜底。
+    return any(token in _MCP_WRITE_VERBS for token in _tokenize_mcp_tool_name(tool_name))
+
+
+def check_mcp_permission_from_hook(data: dict[str, Any]) -> dict[str, Any]:
+    """beforeMCPExecution hook: block write MCP calls for read-only roles."""
+    ctx = load_map_context(data)
+    if ctx is None:
+        return {"permission": "allow"}
+    git_root = ctx["git_root"]
+    tool_name = _extract_tool_name(data)
+    if not _mcp_tool_is_write(tool_name):
+        return {"permission": "allow"}
+    _, _, subagent_id = _extract_subagent_fields(data)
+    if subagent_id:
+        role_data = _read_json_file(
+            _review_path(git_root, ROLES_DIR) / f"{_slug(subagent_id)}.json"
+        )
+        if role_data:
+            role = str(role_data.get("logical_role") or role_data.get("role") or "")
+            if role.startswith("reviewer-") or role in ("explore",):
+                return {
+                    "permission": "deny",
+                    "user_message": f"MAP: role {role!r} is read-only. MCP tool {tool_name!r} would write data.",
+                }
+    return {"permission": "allow"}
+
+
+_git_cache: dict[str, str] = {}
+
+
+def _git_cached(cmd: list[str], cwd: str | None = None) -> str:
+    cache_key = json.dumps(cmd) + "|" + str(cwd or "")
+    if cache_key in _git_cache:
+        return _git_cache[cache_key]
+    try:
+        result = _run_subprocess(cmd, cwd=cwd)
+        value = os.fsdecode(result.stdout).strip() if result.returncode == 0 else ""
+    except OSError:
+        value = ""
+    _git_cache[cache_key] = value
+    return value
+
+
+def _clear_git_cache() -> None:
+    _git_cache.clear()
+
+
 def _cli_advance_fix_queue() -> int:
     git_root = Path(sys.argv[2]) if len(sys.argv) > 2 else Path.cwd()
     resolved = sys.argv[3].split(",") if len(sys.argv) > 3 and sys.argv[3] else None
@@ -2502,6 +3148,8 @@ def main() -> int:
         "set-role": lambda: set_role_from_hook(data),
         "check-tool-permission": lambda: check_tool_permission_from_hook(data),
         "check-task-alignment": lambda: check_task_alignment_from_hook(data),
+        "compact-inject": lambda: compact_inject(data),
+        "check-mcp-permission": lambda: check_mcp_permission_from_hook(data),
     }
 
     handler = handlers.get(mode)
@@ -2509,7 +3157,9 @@ def main() -> int:
         print(json.dumps({"permission": "deny", "user_message": f"Unknown review gate mode: {mode}"}))
         return 1
 
-    print(json.dumps(handler()))
+    result = handler()
+    _clear_git_cache()
+    print(json.dumps(result))
     return 0
 
 
