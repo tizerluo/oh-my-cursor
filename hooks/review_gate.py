@@ -2635,7 +2635,8 @@ def set_role_from_hook(data: dict[str, Any]) -> dict[str, Any]:
 
     spawn_prompt = _subagent_start_prompt(data)
     prompt_role = _infer_logical_role_from_prompt(spawn_prompt)
-    if prompt_role and (not logical_role or logical_role in {"", "generalPurpose", subagent_type}):
+    # prompt 仅可填充空角色或 generalPurpose；不得覆盖 config/payload 已定的具体角色
+    if prompt_role and (not logical_role or logical_role == "generalPurpose"):
         logical_role = prompt_role
 
     if subagent_type == "generalPurpose":
@@ -2728,14 +2729,13 @@ def _resolve_active_role_scan(
     if not actives:
         return None
     session_id = str((config or {}).get("session_id") or "")
+    # 有 session_id 时始终按会话过滤；无匹配则 fail-closed，不回退到全量 actives
     if session_id:
-        scoped = [
+        actives = [
             r
             for r in actives
             if not r.get("session_id") or str(r.get("session_id")) == session_id
         ]
-        if scoped:
-            actives = scoped
 
     event_model = ""
     for key in ("model", "agent_model", "subagent_model"):
@@ -2789,8 +2789,9 @@ def _role_for_permission(ctx: dict[str, Any], data: dict[str, Any]) -> tuple[str
     role_data: dict[str, Any] | None = None
     if subagent_id:
         role_data = _read_json_file(_review_path(git_root, ROLES_DIR) / f"{_slug(subagent_id)}.json")
+        # 已停用的 subagent_id 不得串台到 active-scan 上的其他角色
         if isinstance(role_data, dict) and role_data.get("active") is False:
-            role_data = None
+            return "", None
 
     if role_data is None and config and config.get("active"):
         role_data = _resolve_active_role_scan(git_root, data, config)
@@ -3216,6 +3217,10 @@ def check_mcp_permission_from_hook(data: dict[str, Any]) -> dict[str, Any]:
     """beforeMCPExecution hook: block write MCP calls for read-only roles."""
     ctx = load_map_context(data)
     if ctx is None:
+        return {"permission": "allow"}
+    config = ctx["config"]
+    # 与 Write/Shell 门一致：MAP 未激活时不拦截 MCP
+    if not config or not config.get("active"):
         return {"permission": "allow"}
     tool_name = _extract_tool_name(data)
     if not _mcp_tool_is_write(tool_name):

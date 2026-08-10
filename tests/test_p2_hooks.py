@@ -149,6 +149,19 @@ class McpPermissionTests(SecretBootstrapMixin, unittest.TestCase):
         result = rg.check_mcp_permission_from_hook(data)
         self.assertEqual(result["permission"], "allow")
 
+
+    def test_allows_write_when_config_inactive(self):
+        """MAP 未激活时 MCP 写工具放行（与 Write 门一致）。"""
+        config = {"active": False, "workflow": "multi-agent-pr", "session_id": "sess-mcp"}
+        review_dir = self.root / ".review"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        (review_dir / "config.json").write_text(
+            json.dumps(config) + "\n", encoding="utf-8",
+        )
+        data = {"cwd": str(self.root), "tool_name": "write_file"}
+        result = rg.check_mcp_permission_from_hook(data)
+        self.assertEqual(result["permission"], "allow")
+
     def test_denies_write_when_no_subagent_id_and_no_role(self):
         """v1.3.1：无角色时 MCP 写不再 fail-open（与 Write 门对齐）。"""
         data = {"cwd": str(self.root), "tool_name": "delete_file"}
